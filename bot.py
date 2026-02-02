@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import tempfile
 from datetime import datetime
@@ -10,7 +11,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -26,179 +27,148 @@ NOTION_DB = os.environ.get("NOTION_DATABASE_ID", "")
 app = Client("meeting_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 openai_client = OpenAI(api_key=OPENAI_KEY)
 
-# Setup fonts
-FONT_URL = "https://raw.githubusercontent.com/googlefonts/roboto/main/src/hinted/Roboto-Regular.ttf"
-FONT_BOLD_URL = "https://raw.githubusercontent.com/googlefonts/roboto/main/src/hinted/Roboto-Bold.ttf"
-FONT_PATH = "/tmp/Roboto-Regular.ttf"
-FONT_BOLD_PATH = "/tmp/Roboto-Bold.ttf"
+# Montserrat font - stylish & supports Cyrillic
+FONT_REGULAR = "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Regular.ttf"
+FONT_BOLD = "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf"
+FONT_MEDIUM = "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Medium.ttf"
+
+SHORT_DURATION_SECONDS = 600  # 10 min
 
 async def download_fonts():
-    async with httpx.AsyncClient() as client:
-        if not os.path.exists(FONT_PATH):
-            r = await client.get(FONT_URL)
-            with open(FONT_PATH, 'wb') as f:
-                f.write(r.content)
-        if not os.path.exists(FONT_BOLD_PATH):
-            r = await client.get(FONT_BOLD_URL)
-            with open(FONT_BOLD_PATH, 'wb') as f:
-                f.write(r.content)
-    pdfmetrics.registerFont(TTFont('Roboto', FONT_PATH))
-    pdfmetrics.registerFont(TTFont('Roboto-Bold', FONT_BOLD_PATH))
+    fonts = [
+        ("Montserrat", FONT_REGULAR, "/tmp/Montserrat-Regular.ttf"),
+        ("Montserrat-Bold", FONT_BOLD, "/tmp/Montserrat-Bold.ttf"),
+        ("Montserrat-Medium", FONT_MEDIUM, "/tmp/Montserrat-Medium.ttf"),
+    ]
+    
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        for name, url, path in fonts:
+            if not os.path.exists(path):
+                try:
+                    r = await client.get(url)
+                    with open(path, 'wb') as f:
+                        f.write(r.content)
+                    print(f"✅ Downloaded {name}")
+                except Exception as e:
+                    print(f"❌ Failed to download {name}: {e}")
+                    return False
+            
+            try:
+                pdfmetrics.registerFont(TTFont(name, path))
+            except Exception as e:
+                print(f"❌ Failed to register {name}: {e}")
+                return False
+    
+    return True
 
-ANALYSIS_PROMPT = """Ты — senior бизнес-консультант, эксперт-аналитик и стратег с 20+ летним опытом. Твоё имя — Цифровой Умник.
+SIMPLE_PROMPT = """Ты — помощник для обработки голосовых сообщений.
 
-При анализе встречи ты АВТОМАТИЧЕСКИ становишься экспертом в обсуждаемой области (IT, продажи, маркетинг, финансы, HR, производство, стартапы, инвестиции и т.д.) и используешь ВСЕ свои знания и опыт для рекомендаций.
+Сделай структурированное саммари:
 
-ТВОЯ РОЛЬ:
-- Ты не просто анализируешь — ты КОНСУЛЬТИРУЕШЬ
-- Используй лучшие практики индустрии, фреймворки, методологии
-- Приводи примеры из опыта (как это решают другие компании)
-- Предлагай КОНКРЕТНЫЕ рабочие решения, инструменты, подходы
-- Думай как партнёр, который заинтересован в успехе
+📌 **СУТЬ**
+2-4 предложения — о чём это
+
+📋 **КЛЮЧЕВЫЕ МОМЕНТЫ**
+• пункт 1
+• пункт 2
+
+✅ **ЗАДАЧИ** (если есть)
+• что нужно сделать
+
+💡 **ВАЖНОЕ** (если есть даты, цифры, имена)
+
+Кратко и по делу."""
+
+FULL_ANALYSIS_PROMPT = """Ты — senior бизнес-консультант с 20+ летним опытом. Имя — Цифровой Умник.
 
 ПРАВИЛА:
-- НЕ указывай реальные имена — используй "Сторона А", "Сторона Б"
-- Чётко разделяй: факты из встречи vs твои экспертные рекомендации
-- Помечай свои рекомендации как [РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
+- Не указывай реальные имена — "Сторона А", "Сторона Б"
+- Рекомендации помечай: [РЕКОМЕНДАЦИЯ]
 
-СТРУКТУРА ОТЧЁТА:
+СТРУКТУРА:
 
-## EXECUTIVE SUMMARY (САММАРИ)
-Краткое содержание на 5-7 предложений:
-- О чём встреча
-- Ключевые решения
-- Главные разногласия
-- Критичные next steps
-- Основная рекомендация от Цифрового Умника
+## EXECUTIVE SUMMARY
+5-7 предложений
 
-## 1. КОНТЕКСТ И ОБЛАСТЬ
-- Сфера/индустрия
-- Тип встречи (переговоры, планирование, проблема, статус)
-- Уровень сложности ситуации
+## 1. КОНТЕКСТ
+• Сфера
+• Тип встречи
 
-## 2. ЦЕЛИ ВСТРЕЧИ
+## 2. ЦЕЛИ
+### Явные:
+### Скрытые:
 
-### Явные цели (озвучено):
-- ...
-
-### Скрытые цели (между строк):
-- ...
-
-### [РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА] Как лучше формулировать цели:
-- ...
-
-## 3. КЛЮЧЕВЫЕ ЗАДАЧИ
-Что пытались решить + насколько эффективно подошли к решению
-
-## 4. ВЫЯВЛЕННЫЕ ПОЗИЦИИ
-
+## 3. ПОЗИЦИИ СТОРОН
 ### Сторона А:
-- Позиция и аргументы
-- Истинные интересы
-- Сильные/слабые стороны позиции
-
 ### Сторона Б:
-- Позиция и аргументы
-- Истинные интересы
-- Сильные/слабые стороны позиции
 
-## 5. ТОЧКИ СОГЛАСИЯ
-Где интересы совпадают — это фундамент для решений
+## 4. СОГЛАСИЕ
 
-## 6. ТОЧКИ РАСХОЖДЕНИЯ
-Противоречия и их корневые причины
+## 5. РАСХОЖДЕНИЯ
+[РЕКОМЕНДАЦИЯ]
 
-### [РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА] Как преодолеть расхождения:
-Конкретные техники переговоров, подходы к компромиссу
+## 6. РЕШЕНИЯ
 
-## 7. ПРИНЯТЫЕ РЕШЕНИЯ
-Что решено + оценка качества решений
+## 7. ACTION ITEMS
+• Задача — Срок — Ответственный
 
-## 8. ОТКРЫТЫЕ ВОПРОСЫ
-Что не решено и почему это критично
-
-## 9. ACTION ITEMS
-| Задача | Срок | Ответственный |
-
-## 10. СТРАТЕГИЧЕСКИЙ SWOT-АНАЛИЗ
-
-### Сильные стороны:
-- ...
-
-### Слабые стороны:
-- ...
-
+## 8. SWOT
+### Сильные:
+### Слабые:
 ### Возможности:
-- ...
-
 ### Угрозы:
-- ...
 
-## 11. ЭКСПЕРТНЫЕ РЕКОМЕНДАЦИИ
+## 9. РЕКОМЕНДАЦИИ
+[РЕКОМЕНДАЦИЯ]
 
-### По существу вопроса (что делать):
-[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
-Конкретные решения, основанные на лучших практиках индустрии:
-1. ...
-2. ...
-
-### По процессу (как делать лучше):
-[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
-1. ...
-2. ...
-
-### Инструменты и методологии:
-[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
-Какие фреймворки, инструменты, подходы применить:
-- ...
-
-### Бенчмарки и примеры:
-[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
-Как подобные задачи решают лидеры рынка:
-- ...
-
-## 12. РИСКИ И КАК ИХ ИЗБЕЖАТЬ
-
-| Риск | Вероятность | Влияние | Как предотвратить |
-| ... | Высокая/Средняя/Низкая | ... | [РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА] |
-
-## 13. ПЛАН ДАЛЬНЕЙШИХ ДЕЙСТВИЙ
-
+## 10. ПЛАН
 ### Срочно (1-7 дней):
-1. ...
-
 ### Среднесрок (1-4 недели):
-1. ...
 
-### Долгосрок (1-3 месяца):
-1. ...
+## 11. РИСКИ
 
-### KPI и метрики успеха:
-[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
-Как измерить что всё идёт по плану:
-- ...
-
-## 14. СКРЫТАЯ ДИНАМИКА
-- Невысказанные напряжения
-- Эмоциональный фон
-- Потенциальные конфликты
-
-## 15. ЗАКЛЮЧЕНИЕ ЦИФРОВОГО УМНИКА
-
+## 12. ВЫВОД
 ### Главный инсайт:
-(1-2 предложения — самое важное)
-
-### Ключевая рекомендация:
-[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
-Если бы я был на этой встрече как консультант, я бы посоветовал...
-
 ### Прогноз:
-Что произойдёт если следовать/не следовать рекомендациям
-
----
-📌 Факты взяты из транскрипта
-🧠 [РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА] — экспертное мнение на основе лучших практик
 """
+
+def is_url(text: str) -> bool:
+    return bool(re.match(r'https?://[^\s]+', text.strip()))
+
+async def download_from_url(url: str) -> str:
+    output_template = f"/tmp/ytdl_{datetime.now().timestamp()}.%(ext)s"
+    
+    process = await asyncio.create_subprocess_exec(
+        "yt-dlp", "-x", "--audio-format", "mp3",
+        "-o", output_template, "--no-playlist", "--max-filesize", "50M", url,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    
+    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
+    
+    if process.returncode != 0:
+        raise Exception("Не удалось скачать видео")
+    
+    import glob
+    files = glob.glob(f"/tmp/ytdl_{datetime.now().timestamp()}*".replace(".%(ext)s", "") + "*")
+    if not files:
+        files = glob.glob("/tmp/ytdl_*")
+    
+    if files:
+        return sorted(files, key=os.path.getmtime)[-1]
+    raise Exception("Файл не найден")
+
+async def get_audio_duration(file_path: str) -> int:
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", file_path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await process.communicate()
+        return int(float(stdout.decode().strip()))
+    except:
+        return 0
 
 async def transcribe_deepgram(file_path: str) -> str:
     async with httpx.AsyncClient(timeout=600.0) as client:
@@ -211,264 +181,391 @@ async def transcribe_deepgram(file_path: str) -> str:
         result = response.json()
         return result["results"]["channels"][0]["alternatives"][0]["transcript"]
 
+def analyze_simple(transcript: str) -> str:
+    response = openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": SIMPLE_PROMPT},
+            {"role": "user", "content": f"Транскрипт:\n\n{transcript}"}
+        ],
+        max_tokens=1500, temperature=0.3
+    )
+    return response.choices[0].message.content
+
 def analyze_meeting(transcript: str) -> str:
     response = openai_client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": ANALYSIS_PROMPT},
-            {"role": "user", "content": f"Проанализируй эту встречу как эксперт-консультант:\n\n{transcript}"}
+            {"role": "system", "content": FULL_ANALYSIS_PROMPT},
+            {"role": "user", "content": f"Проанализируй:\n\n{transcript}"}
         ],
-        max_tokens=8000,
-        temperature=0.4
+        max_tokens=8000, temperature=0.4
     )
     return response.choices[0].message.content
 
-def create_pdf(analysis: str, output_path: str) -> None:
+def create_full_pdf(analysis: str, output_path: str) -> None:
     doc = SimpleDocTemplate(
-        output_path,
-        pagesize=A4,
-        rightMargin=2*cm,
-        leftMargin=2*cm,
-        topMargin=2*cm,
-        bottomMargin=2*cm
+        output_path, pagesize=A4,
+        rightMargin=1.8*cm, leftMargin=1.8*cm,
+        topMargin=1.5*cm, bottomMargin=1.5*cm
     )
+    
+    # Colors
+    PRIMARY = colors.HexColor('#1a1a2e')
+    SECONDARY = colors.HexColor('#16213e')
+    ACCENT = colors.HexColor('#0f3460')
+    BLUE = colors.HexColor('#1565c0')
+    LIGHT_BG = colors.HexColor('#f5f7fa')
+    BLUE_BG = colors.HexColor('#e8f4fc')
+    GRAY = colors.HexColor('#5a6a7a')
     
     styles = getSampleStyleSheet()
     
+    # Title
     styles.add(ParagraphStyle(
-        name='RuTitle',
-        fontName='Roboto-Bold',
-        fontSize=18,
-        spaceAfter=30,
-        alignment=1,
-        textColor=colors.HexColor('#1a1a2e')
+        name='Title1', fontName='Montserrat-Bold', fontSize=22,
+        textColor=PRIMARY, alignment=1, spaceAfter=8
     ))
     
+    # Subtitle  
     styles.add(ParagraphStyle(
-        name='RuHeading',
-        fontName='Roboto-Bold',
-        fontSize=14,
-        spaceBefore=20,
-        spaceAfter=10,
-        textColor=colors.HexColor('#16213e')
+        name='Subtitle1', fontName='Montserrat', fontSize=10,
+        textColor=GRAY, alignment=1, spaceAfter=20
     ))
     
+    # Section header
     styles.add(ParagraphStyle(
-        name='RuSubheading',
-        fontName='Roboto-Bold',
-        fontSize=12,
-        spaceBefore=15,
-        spaceAfter=8,
-        textColor=colors.HexColor('#1f4068')
+        name='Section', fontName='Montserrat-Bold', fontSize=13,
+        textColor=PRIMARY, spaceBefore=22, spaceAfter=10,
+        borderPadding=(8, 0, 8, 0)
     ))
     
+    # Subsection
     styles.add(ParagraphStyle(
-        name='RuBody',
-        fontName='Roboto',
-        fontSize=11,
-        spaceBefore=6,
-        spaceAfter=6,
-        leading=16
+        name='Subsection', fontName='Montserrat-Medium', fontSize=11,
+        textColor=SECONDARY, spaceBefore=12, spaceAfter=6
     ))
     
+    # Body
     styles.add(ParagraphStyle(
-        name='RuExpert',
-        fontName='Roboto',
-        fontSize=11,
-        spaceBefore=6,
-        spaceAfter=6,
-        leading=16,
-        leftIndent=20,
-        textColor=colors.HexColor('#0066cc'),
-        backColor=colors.HexColor('#f0f7ff')
+        name='Body1', fontName='Montserrat', fontSize=10,
+        textColor=colors.HexColor('#333333'), leading=15,
+        spaceBefore=3, spaceAfter=3
     ))
     
+    # Bullet
     styles.add(ParagraphStyle(
-        name='RuSummary',
-        fontName='Roboto',
-        fontSize=12,
-        spaceBefore=10,
-        spaceAfter=10,
-        leading=18,
-        backColor=colors.HexColor('#f5f5f5'),
-        borderPadding=10
+        name='Bullet1', fontName='Montserrat', fontSize=10,
+        textColor=colors.HexColor('#333333'), leading=15,
+        leftIndent=12, spaceBefore=2, spaceAfter=2
+    ))
+    
+    # Summary box text
+    styles.add(ParagraphStyle(
+        name='SummaryBox', fontName='Montserrat', fontSize=10,
+        textColor=PRIMARY, leading=16, spaceBefore=5, spaceAfter=5
+    ))
+    
+    # Recommendation
+    styles.add(ParagraphStyle(
+        name='Recommendation', fontName='Montserrat-Medium', fontSize=10,
+        textColor=BLUE, leading=15, leftIndent=8, spaceBefore=8, spaceAfter=8
     ))
     
     story = []
+    date_str = datetime.now().strftime("%d.%m.%Y в %H:%M")
     
-    date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
-    story.append(Paragraph("АНАЛИЗ ВСТРЕЧИ", styles['RuTitle']))
-    story.append(Paragraph("Экспертный отчёт от Цифрового Умника", styles['RuBody']))
-    story.append(Paragraph(f"Дата: {date_str}", styles['RuBody']))
-    story.append(Spacer(1, 20))
+    # Header
+    story.append(Paragraph("АНАЛИЗ ВСТРЕЧИ", styles['Title1']))
+    story.append(Paragraph(f"Экспертный отчёт • {date_str}", styles['Subtitle1']))
+    story.append(HRFlowable(width="100%", thickness=2, color=ACCENT, spaceAfter=20))
     
     in_summary = False
-    for line in analysis.split('\n'):
-        line = line.strip()
+    summary_lines = []
+    
+    lines = analysis.split('\n')
+    i = 0
+    
+    while i < len(lines):
+        line = lines[i].strip()
+        i += 1
+        
         if not line:
-            story.append(Spacer(1, 8))
             continue
         
-        if 'EXECUTIVE SUMMARY' in line or 'САММАРИ' in line:
+        # Executive Summary
+        if 'EXECUTIVE SUMMARY' in line.upper():
             in_summary = True
-            story.append(Paragraph("📋 EXECUTIVE SUMMARY", styles['RuHeading']))
+            story.append(Paragraph("📋  EXECUTIVE SUMMARY", styles['Section']))
             continue
         
+        # End summary
         if line.startswith('## ') and in_summary:
+            if summary_lines:
+                summary_text = ' '.join(summary_lines)
+                # Create summary box
+                tbl = Table([[Paragraph(summary_text, styles['SummaryBox'])]], colWidths=[16*cm])
+                tbl.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, -1), LIGHT_BG),
+                    ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#dde3ea')),
+                    ('TOPPADDING', (0, 0), (-1, -1), 12),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 14),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 14),
+                ]))
+                story.append(tbl)
+                story.append(Spacer(1, 10))
+                summary_lines = []
             in_summary = False
         
         if in_summary and not line.startswith('#'):
-            story.append(Paragraph(line, styles['RuSummary']))
-        elif line.startswith('## '):
-            story.append(Paragraph(line[3:].upper(), styles['RuHeading']))
+            summary_lines.append(line)
+            continue
+        
+        # Section headers ##
+        if line.startswith('## '):
+            title = line[3:].strip().upper()
+            story.append(Paragraph(f"▌ {title}", styles['Section']))
+        
+        # Subsection ###
         elif line.startswith('### '):
-            story.append(Paragraph(line[4:], styles['RuSubheading']))
-        elif '[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]' in line:
-            clean_line = line.replace('[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]', '🧠')
-            story.append(Paragraph(clean_line, styles['RuExpert']))
-        elif line.startswith('- '):
-            story.append(Paragraph(f"• {line[2:]}", styles['RuBody']))
-        elif line.startswith('| '):
-            story.append(Paragraph(line, styles['RuBody']))
+            title = line[4:].strip()
+            story.append(Paragraph(title, styles['Subsection']))
+        
+        # Recommendation
+        elif '[РЕКОМЕНДАЦИЯ]' in line or '[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]' in line:
+            clean = line.replace('[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]', '').replace('[РЕКОМЕНДАЦИЯ]', '').strip()
+            # Recommendation box
+            tbl = Table([[Paragraph(f"🧠 {clean}" if clean else "🧠 Рекомендация эксперта:", styles['Recommendation'])]], colWidths=[16*cm])
+            tbl.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), BLUE_BG),
+                ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#90caf9')),
+                ('TOPPADDING', (0, 0), (-1, -1), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+                ('LEFTPADDING', (0, 0), (-1, -1), 12),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+            ]))
+            story.append(tbl)
+        
+        # Bullets
+        elif line.startswith('- ') or line.startswith('• '):
+            story.append(Paragraph(f"●  {line[2:]}", styles['Bullet1']))
+        
+        # Numbered
+        elif len(line) > 2 and line[0].isdigit() and line[1] in '.):':
+            story.append(Paragraph(f"    {line}", styles['Bullet1']))
+        
+        # Regular text
         else:
-            story.append(Paragraph(line, styles['RuBody']))
+            story.append(Paragraph(line, styles['Body1']))
+    
+    # Footer
+    story.append(Spacer(1, 25))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#dde3ea'), spaceBefore=10))
+    story.append(Paragraph("📌 Факты из встречи  •  🧠 Рекомендации Цифрового Умника", styles['Subtitle1']))
     
     doc.build(story)
 
-async def save_to_notion(title: str, analysis: str) -> str:
+async def save_to_notion(title: str, content: str) -> str:
+    print(f"📝 Notion: Starting save...")
+    print(f"   NOTION_KEY present: {bool(NOTION_KEY)}")
+    print(f"   NOTION_DB: {NOTION_DB[:20]}..." if NOTION_DB else "   NOTION_DB: empty")
+    
     if not NOTION_KEY or not NOTION_DB:
+        print("❌ Notion: Missing credentials")
         return None
     
-    blocks = []
-    for line in analysis.split('\n'):
-        line = line.strip()
-        if not line:
+    # Extract summary
+    summary_text = ""
+    in_sum = False
+    for line in content.split('\n'):
+        if 'EXECUTIVE SUMMARY' in line.upper():
+            in_sum = True
             continue
-        elif line.startswith('## '):
+        if line.startswith('## ') and in_sum:
+            break
+        if in_sum and line.strip():
+            summary_text += line.strip() + " "
+    summary_text = summary_text[:2000] or "Анализ встречи"
+    
+    # Build blocks
+    blocks = []
+    for line in content.split('\n'):
+        line = line.strip()
+        if not line or len(blocks) >= 95:
+            continue
+        
+        line = line[:2000]
+        
+        if line.startswith('## '):
             blocks.append({
-                "object": "block",
-                "type": "heading_2",
-                "heading_2": {"rich_text": [{"type": "text", "text": {"content": line[3:]}}]}
+                "object": "block", "type": "heading_2",
+                "heading_2": {"rich_text": [{"type": "text", "text": {"content": line[3:][:100]}}]}
             })
         elif line.startswith('### '):
             blocks.append({
-                "object": "block",
-                "type": "heading_3",
-                "heading_3": {"rich_text": [{"type": "text", "text": {"content": line[4:]}}]}
+                "object": "block", "type": "heading_3",
+                "heading_3": {"rich_text": [{"type": "text", "text": {"content": line[4:][:100]}}]}
             })
-        elif '[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]' in line:
+        elif '[РЕКОМЕНДАЦИЯ' in line:
+            clean = line.replace('[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]', '').replace('[РЕКОМЕНДАЦИЯ]', '').strip()
             blocks.append({
-                "object": "block",
-                "type": "callout",
+                "object": "block", "type": "callout",
                 "callout": {
-                    "rich_text": [{"type": "text", "text": {"content": line.replace('[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]', '')}}],
-                    "icon": {"emoji": "🧠"}
+                    "rich_text": [{"type": "text", "text": {"content": clean or "Рекомендация"}}],
+                    "icon": {"emoji": "🧠"}, "color": "blue_background"
                 }
             })
-        elif line.startswith('- '):
+        elif line.startswith('- ') or line.startswith('• '):
             blocks.append({
-                "object": "block",
-                "type": "bulleted_list_item",
+                "object": "block", "type": "bulleted_list_item",
                 "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": line[2:]}}]}
-            })
-        elif line.startswith(('1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.')):
-            blocks.append({
-                "object": "block",
-                "type": "numbered_list_item",
-                "numbered_list_item": {"rich_text": [{"type": "text", "text": {"content": line[3:].strip()}}]}
             })
         else:
             blocks.append({
-                "object": "block",
-                "type": "paragraph",
+                "object": "block", "type": "paragraph",
                 "paragraph": {"rich_text": [{"type": "text", "text": {"content": line}}]}
             })
     
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.notion.com/v1/pages",
-            headers={
-                "Authorization": f"Bearer {NOTION_KEY}",
-                "Content-Type": "application/json",
-                "Notion-Version": "2022-06-28"
-            },
-            json={
-                "parent": {"database_id": NOTION_DB},
-                "properties": {
-                    "Name": {"title": [{"text": {"content": title}}]},
-                    "Meeting Date": {"date": {"start": datetime.now().isoformat()}}
+    payload = {
+        "parent": {"database_id": NOTION_DB},
+        "properties": {
+            "Name": {"title": [{"text": {"content": title[:100]}}]},
+            "Meeting Date": {"date": {"start": datetime.now().strftime("%Y-%m-%d")}},
+            "summary": {"rich_text": [{"text": {"content": summary_text[:2000]}}]}
+        },
+        "children": blocks
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.notion.com/v1/pages",
+                headers={
+                    "Authorization": f"Bearer {NOTION_KEY}",
+                    "Content-Type": "application/json",
+                    "Notion-Version": "2022-06-28"
                 },
-                "children": blocks[:100]
-            }
-        )
-        if response.status_code == 200:
-            return response.json().get("url")
+                json=payload
+            )
+            
+            print(f"   Notion response: {response.status_code}")
+            
+            if response.status_code == 200:
+                url = response.json().get("url")
+                print(f"✅ Notion: Created {url}")
+                return url
+            else:
+                print(f"❌ Notion error: {response.text[:500]}")
+                return None
+                
+    except Exception as e:
+        print(f"❌ Notion exception: {e}")
         return None
 
 @app.on_message(filters.command("start"))
 async def start_handler(client, message: Message):
-    welcome = """👋 хелло пупсики! Я — Цифровой Консультант, и у меня ОКР.
+    await message.reply("""👋 Привет! Я — **Цифровой Умник**
 
-📎 **Отправь аудио или видео** записи
+🎤 **Голосовое / короткое аудио** (до 10 мин)
+→ Саммари текстом
 
-📋 **Что ты получишь:**
-• 📝 Executive Summary (краткое саммари)
-• 🎯 Цели и задачи встречи
-• ⚖️ Позиции сторон и точки согласия/расхождения
-• 📊 SWOT-анализ ситуации
-• 🧠 Рекомендации от Цифрового Умника
-• 📅 План действий с KPI
-• 📄 PDF-отчёт + страница в Notion
+🎬 **Длинные встречи** (от 10 мин)
+→ Полный анализ + PDF + Notion
 
-🎯 Анализирую как senior консультант — даю рабочие решения из лучших практик.
+🔗 **Ссылка YouTube**
+→ Скачаю и обработаю
 
-🔒 Файлы сразу удаляются."""
-    await message.reply(welcome)
+Просто отправь файл или ссылку!""")
+
+@app.on_message(filters.text & ~filters.command(["start"]))
+async def url_handler(client, message: Message):
+    text = message.text.strip()
+    
+    if not is_url(text):
+        await message.reply("🤔 Отправь аудио/видео или ссылку на YouTube")
+        return
+    
+    status = await message.reply("🔗 Скачиваю...")
+    
+    try:
+        file_path = await download_from_url(text)
+        await process_audio(message, status, file_path)
+    except Exception as e:
+        await status.edit_text(f"❌ {e}")
 
 @app.on_message(filters.audio | filters.video | filters.document | filters.voice | filters.video_note)
 async def media_handler(client, message: Message):
     status = await message.reply("⏳ Скачиваю...")
     
     try:
-        await download_fonts()
-        
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
             await message.download(tmp.name)
-            tmp_path = tmp.name
+            file_path = tmp.name
         
-        await status.edit_text("🎙 Транскрибирую...")
-        transcript = await transcribe_deepgram(tmp_path)
-        
-        if len(transcript) < 100:
-            await status.edit_text("⚠️ Слишком короткая запись")
-            os.unlink(tmp_path)
-            return
-        
-        await status.edit_text("🧠 Цифровой Умник чёт думает ...")
-        analysis = analyze_meeting(transcript)
-        
-        await status.edit_text("📄 Создаю PDF...")
-        pdf_path = tmp_path.replace('.mp4', '.pdf')
-        create_pdf(analysis, pdf_path)
-        
-        await status.edit_text("📝 Сохраняю в Notion...")
-        title = f"Встреча {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-        notion_url = await save_to_notion(title, analysis)
-        
-        await status.edit_text("📤 Отправляю...")
-        
-        caption = "📋 **Экспертный анализ от Цифрового Умника готов!**\n\n🧠 Включает саммари, анализ и рекомендации"
-        if notion_url:
-            caption += f"\n\n🔗 [Открыть в Notion]({notion_url})"
-        
-        await message.reply_document(pdf_path, caption=caption)
-        await status.delete()
-        
-        os.unlink(tmp_path)
-        os.unlink(pdf_path)
+        is_voice = bool(message.voice or message.video_note)
+        await process_audio(message, status, file_path, is_voice=is_voice)
         
     except Exception as e:
-        await status.edit_text(f"❌ Ошибка: {str(e)}")
+        await status.edit_text(f"❌ {e}")
+
+async def process_audio(message: Message, status: Message, file_path: str, is_voice: bool = False):
+    try:
+        duration = await get_audio_duration(file_path)
+        print(f"📊 Duration: {duration}s, is_voice: {is_voice}")
+        
+        await status.edit_text("🎙 Транскрибирую...")
+        transcript = await transcribe_deepgram(file_path)
+        
+        if len(transcript) < 50:
+            await status.edit_text("⚠️ Не удалось распознать речь")
+            os.unlink(file_path)
+            return
+        
+        is_short = is_voice or duration < SHORT_DURATION_SECONDS
+        
+        if is_short:
+            await status.edit_text("📝 Готовлю саммари...")
+            summary = analyze_simple(transcript)
+            
+            await status.delete()
+            await message.reply(summary)
+            os.unlink(file_path)
+            
+        else:
+            fonts_ok = await download_fonts()
+            if not fonts_ok:
+                await status.edit_text("❌ Ошибка загрузки шрифтов")
+                return
+            
+            await status.edit_text("🧠 Анализирую встречу...")
+            analysis = analyze_meeting(transcript)
+            
+            await status.edit_text("📄 Создаю PDF...")
+            pdf_path = file_path + ".pdf"
+            create_full_pdf(analysis, pdf_path)
+            
+            await status.edit_text("📝 Сохраняю в Notion...")
+            title = f"Встреча {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+            notion_url = await save_to_notion(title, analysis)
+            
+            caption = "📊 **Анализ от Цифрового Умника**"
+            if notion_url:
+                caption += f"\n\n🔗 [Открыть в Notion]({notion_url})"
+            else:
+                caption += "\n\n⚠️ Notion: не удалось сохранить"
+            
+            await status.delete()
+            await message.reply_document(pdf_path, caption=caption)
+            
+            os.unlink(file_path)
+            os.unlink(pdf_path)
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        await status.edit_text(f"❌ {e}")
+        if os.path.exists(file_path):
+            os.unlink(file_path)
 
 print("🧠 Цифровой Умник запущен!")
 app.run()
