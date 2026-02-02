@@ -186,12 +186,26 @@ def is_url(text: str) -> bool:
 
 async def download_from_url(url: str) -> str:
     """Download video/audio from URL using yt-dlp"""
+    
+    # Update yt-dlp first (YouTube often changes)
+    update_proc = await asyncio.create_subprocess_exec(
+        "pip", "install", "-U", "yt-dlp",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    await update_proc.communicate()
+    
     output_path = f"/tmp/ytdl_{int(datetime.now().timestamp())}"
     
     process = await asyncio.create_subprocess_exec(
-        "yt-dlp", "-x", "--audio-format", "mp3",
+        "yt-dlp",
+        "-x", "--audio-format", "mp3",
         "-o", f"{output_path}.%(ext)s",
-        "--no-playlist", "--max-filesize", "100M",
+        "--no-playlist",
+        "--max-filesize", "100M",
+        "--no-check-certificates",
+        "--geo-bypass",
+        "--extractor-retries", "3",
         url,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
@@ -200,8 +214,14 @@ async def download_from_url(url: str) -> str:
     stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
     
     if process.returncode != 0:
+        error_msg = stderr.decode()[:200]
         print(f"yt-dlp error: {stderr.decode()}")
-        raise Exception("Не удалось скачать видео. Проверь ссылку.")
+        raise Exception(f"Не удалось скачать: {error_msg}")
+    
+    files = glob.glob(f"{output_path}.*")
+    if files:
+        return files[0]
+    raise Exception("Файл не найден после скачивания")
     
     files = glob.glob(f"{output_path}.*")
     if files:
