@@ -2,7 +2,6 @@ import os
 import asyncio
 import tempfile
 from datetime import datetime
-from pathlib import Path
 import httpx
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -12,6 +11,9 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import urllib.request
 
 # Config
 API_ID = int(os.environ["TELEGRAM_API_ID"])
@@ -22,6 +24,22 @@ OPENAI_KEY = os.environ["OPENAI_API_KEY"]
 
 app = Client("meeting_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 openai_client = OpenAI(api_key=OPENAI_KEY)
+
+# Download and register font with Cyrillic support
+FONT_URL = "https://github.com/google/fonts/raw/main/ofl/roboto/Roboto-Regular.ttf"
+FONT_BOLD_URL = "https://github.com/google/fonts/raw/main/ofl/roboto/Roboto-Bold.ttf"
+FONT_PATH = "/tmp/Roboto-Regular.ttf"
+FONT_BOLD_PATH = "/tmp/Roboto-Bold.ttf"
+
+def setup_fonts():
+    if not os.path.exists(FONT_PATH):
+        urllib.request.urlretrieve(FONT_URL, FONT_PATH)
+    if not os.path.exists(FONT_BOLD_PATH):
+        urllib.request.urlretrieve(FONT_BOLD_URL, FONT_BOLD_PATH)
+    pdfmetrics.registerFont(TTFont('Roboto', FONT_PATH))
+    pdfmetrics.registerFont(TTFont('Roboto-Bold', FONT_BOLD_PATH))
+
+setup_fonts()
 
 ANALYSIS_PROMPT = """Ты — эксперт по анализу деловых переговоров и встреч. Проанализируй транскрипт и создай структурированный отчёт.
 
@@ -129,7 +147,8 @@ def create_pdf(analysis: str, output_path: str) -> None:
     styles = getSampleStyleSheet()
     
     styles.add(ParagraphStyle(
-        name='CustomTitle',
+        name='RuTitle',
+        fontName='Roboto-Bold',
         fontSize=18,
         spaceAfter=30,
         alignment=1,
@@ -137,7 +156,8 @@ def create_pdf(analysis: str, output_path: str) -> None:
     ))
     
     styles.add(ParagraphStyle(
-        name='CustomHeading',
+        name='RuHeading',
+        fontName='Roboto-Bold',
         fontSize=14,
         spaceBefore=20,
         spaceAfter=10,
@@ -145,7 +165,8 @@ def create_pdf(analysis: str, output_path: str) -> None:
     ))
     
     styles.add(ParagraphStyle(
-        name='CustomSubheading',
+        name='RuSubheading',
+        fontName='Roboto-Bold',
         fontSize=12,
         spaceBefore=15,
         spaceAfter=8,
@@ -153,7 +174,8 @@ def create_pdf(analysis: str, output_path: str) -> None:
     ))
     
     styles.add(ParagraphStyle(
-        name='CustomBody',
+        name='RuBody',
+        fontName='Roboto',
         fontSize=11,
         spaceBefore=6,
         spaceAfter=6,
@@ -163,8 +185,8 @@ def create_pdf(analysis: str, output_path: str) -> None:
     story = []
     
     date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
-    story.append(Paragraph("АНАЛИЗ ВСТРЕЧИ", styles['CustomTitle']))
-    story.append(Paragraph(f"Дата анализа: {date_str}", styles['CustomBody']))
+    story.append(Paragraph("АНАЛИЗ ВСТРЕЧИ", styles['RuTitle']))
+    story.append(Paragraph(f"Дата анализа: {date_str}", styles['RuBody']))
     story.append(Spacer(1, 20))
     
     lines = analysis.split('\n')
@@ -173,15 +195,15 @@ def create_pdf(analysis: str, output_path: str) -> None:
         if not line:
             story.append(Spacer(1, 8))
         elif line.startswith('## '):
-            story.append(Paragraph(line[3:].upper(), styles['CustomHeading']))
+            story.append(Paragraph(line[3:].upper(), styles['RuHeading']))
         elif line.startswith('### '):
-            story.append(Paragraph(line[4:], styles['CustomSubheading']))
+            story.append(Paragraph(line[4:], styles['RuSubheading']))
         elif line.startswith('- '):
-            story.append(Paragraph(f"• {line[2:]}", styles['CustomBody']))
+            story.append(Paragraph(f"• {line[2:]}", styles['RuBody']))
         elif line.startswith(('1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.')):
-            story.append(Paragraph(line, styles['CustomBody']))
+            story.append(Paragraph(line, styles['RuBody']))
         else:
-            story.append(Paragraph(line, styles['CustomBody']))
+            story.append(Paragraph(line, styles['RuBody']))
     
     doc.build(story)
 
