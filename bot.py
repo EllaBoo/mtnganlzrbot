@@ -407,7 +407,7 @@ async def save_to_notion(title: str, analysis: str) -> str:
 
 @app.on_message(filters.command("start"))
 async def start_handler(client, message: Message):
-    welcome = """👋 Привет! Я — Цифровой Умник, AI-консультант по анализу встреч.
+    welcome = """👋 хелло пупсики! Я — Цифровой Консультант, и у меня ОКР.
 
 📎 **Отправь аудио или видео** записи
 
@@ -444,7 +444,7 @@ async def media_handler(client, message: Message):
             os.unlink(tmp_path)
             return
         
-        await status.edit_text("🧠 Цифровой Умник анализирует...")
+        await status.edit_text("🧠 Цифровой Умник чёт думает ...")
         analysis = analyze_meeting(transcript)
         
         await status.edit_text("📄 Создаю PDF...")
