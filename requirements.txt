@@ -3,3 +3,4 @@ tgcrypto
 httpx
 openai
 reportlab
+yt-dlp
