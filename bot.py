@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import tempfile
+import glob
 from datetime import datetime
 import httpx
 from pyrogram import Client, filters
@@ -15,7 +16,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable,
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# Config
+# ============ CONFIG ============
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -27,14 +28,133 @@ NOTION_DB = os.environ.get("NOTION_DATABASE_ID", "")
 app = Client("meeting_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 openai_client = OpenAI(api_key=OPENAI_KEY)
 
-# Montserrat font - stylish & supports Cyrillic
+# ============ FONTS ============
 FONT_REGULAR = "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Regular.ttf"
 FONT_BOLD = "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf"
 FONT_MEDIUM = "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Medium.ttf"
 
-SHORT_DURATION_SECONDS = 600  # 10 min
+# ============ THRESHOLDS ============
+SHORT_DURATION_SECONDS = 600  # 10 minutes
+SHORT_TRANSCRIPT_CHARS = 3000  # ~5 min of speech
+
+# ============ PROMPTS ============
+SIMPLE_PROMPT = """Ты — помощник для обработки голосовых сообщений и коротких аудио.
+
+Сделай структурированное саммари:
+
+📌 **СУТЬ СООБЩЕНИЯ**
+2-4 предложения — о чём это
+
+📋 **КЛЮЧЕВЫЕ МОМЕНТЫ**
+• пункт 1
+• пункт 2
+• ...
+
+✅ **ЗАДАЧИ** (если есть)
+• что нужно сделать
+
+💡 **ВАЖНОЕ** (если есть даты, цифры, имена, контакты)
+
+Пиши кратко и по делу. Используй эмодзи для структуры."""
+
+FULL_ANALYSIS_PROMPT = """Ты — senior бизнес-консультант, эксперт-аналитик и стратег с 20+ летним опытом. Твоё имя — Цифровой Умник.
+
+ТВОЯ РОЛЬ:
+- Ты не просто анализируешь — ты КОНСУЛЬТИРУЕШЬ
+- Используй лучшие практики индустрии, фреймворки, методологии
+- Предлагай КОНКРЕТНЫЕ рабочие решения, инструменты, подходы
+
+ПРАВИЛА:
+- НЕ указывай реальные имена — используй "Сторона А", "Сторона Б"
+- Помечай рекомендации как [РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
+
+СТРУКТУРА ОТЧЁТА:
+
+## EXECUTIVE SUMMARY
+5-7 предложений: суть, решения, разногласия, next steps, главная рекомендация
+
+## 1. КОНТЕКСТ И ОБЛАСТЬ
+- Сфера/индустрия
+- Тип встречи
+- Уровень сложности
+
+## 2. ЦЕЛИ ВСТРЕЧИ
+
+### Явные цели:
+- ...
+
+### Скрытые цели:
+- ...
+
+### [РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
+- ...
+
+## 3. КЛЮЧЕВЫЕ ЗАДАЧИ
+
+## 4. ВЫЯВЛЕННЫЕ ПОЗИЦИИ
+
+### Сторона А:
+- Позиция и аргументы
+- Истинные интересы
+
+### Сторона Б:
+- Позиция и аргументы
+- Истинные интересы
+
+## 5. ТОЧКИ СОГЛАСИЯ
+
+## 6. ТОЧКИ РАСХОЖДЕНИЯ
+
+### [РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
+
+## 7. ПРИНЯТЫЕ РЕШЕНИЯ
+
+## 8. ОТКРЫТЫЕ ВОПРОСЫ
+
+## 9. ACTION ITEMS
+- Задача | Срок | Ответственный
+
+## 10. SWOT-АНАЛИЗ
+
+### Сильные стороны:
+### Слабые стороны:
+### Возможности:
+### Угрозы:
+
+## 11. ЭКСПЕРТНЫЕ РЕКОМЕНДАЦИИ
+
+### По существу вопроса:
+[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
+
+### Инструменты и методологии:
+[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
+
+## 12. РИСКИ
+- Риск | Вероятность | Как предотвратить
+
+## 13. ПЛАН ДЕЙСТВИЙ
+
+### Срочно (1-7 дней):
+### Среднесрок (1-4 недели):
+### Долгосрок (1-3 месяца):
+
+### KPI:
+[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
+
+## 14. СКРЫТАЯ ДИНАМИКА
+
+## 15. ЗАКЛЮЧЕНИЕ ЦИФРОВОГО УМНИКА
+
+### Главный инсайт:
+### Ключевая рекомендация:
+### Прогноз:
+"""
+
+
+# ============ HELPERS ============
 
 async def download_fonts():
+    """Download and register Montserrat fonts"""
     fonts = [
         ("Montserrat", FONT_REGULAR, "/tmp/Montserrat-Regular.ttf"),
         ("Montserrat-Bold", FONT_BOLD, "/tmp/Montserrat-Bold.ttf"),
@@ -50,127 +170,73 @@ async def download_fonts():
                         f.write(r.content)
                     print(f"✅ Downloaded {name}")
                 except Exception as e:
-                    print(f"❌ Failed to download {name}: {e}")
+                    print(f"❌ Font download failed {name}: {e}")
                     return False
-            
             try:
                 pdfmetrics.registerFont(TTFont(name, path))
-            except Exception as e:
-                print(f"❌ Failed to register {name}: {e}")
-                return False
-    
+            except:
+                pass
     return True
 
-SIMPLE_PROMPT = """Ты — помощник для обработки голосовых сообщений.
-
-Сделай структурированное саммари:
-
-📌 **СУТЬ**
-2-4 предложения — о чём это
-
-📋 **КЛЮЧЕВЫЕ МОМЕНТЫ**
-• пункт 1
-• пункт 2
-
-✅ **ЗАДАЧИ** (если есть)
-• что нужно сделать
-
-💡 **ВАЖНОЕ** (если есть даты, цифры, имена)
-
-Кратко и по делу."""
-
-FULL_ANALYSIS_PROMPT = """Ты — senior бизнес-консультант с 20+ летним опытом. Имя — Цифровой Умник.
-
-ПРАВИЛА:
-- Не указывай реальные имена — "Сторона А", "Сторона Б"
-- Рекомендации помечай: [РЕКОМЕНДАЦИЯ]
-
-СТРУКТУРА:
-
-## EXECUTIVE SUMMARY
-5-7 предложений
-
-## 1. КОНТЕКСТ
-• Сфера
-• Тип встречи
-
-## 2. ЦЕЛИ
-### Явные:
-### Скрытые:
-
-## 3. ПОЗИЦИИ СТОРОН
-### Сторона А:
-### Сторона Б:
-
-## 4. СОГЛАСИЕ
-
-## 5. РАСХОЖДЕНИЯ
-[РЕКОМЕНДАЦИЯ]
-
-## 6. РЕШЕНИЯ
-
-## 7. ACTION ITEMS
-• Задача — Срок — Ответственный
-
-## 8. SWOT
-### Сильные:
-### Слабые:
-### Возможности:
-### Угрозы:
-
-## 9. РЕКОМЕНДАЦИИ
-[РЕКОМЕНДАЦИЯ]
-
-## 10. ПЛАН
-### Срочно (1-7 дней):
-### Среднесрок (1-4 недели):
-
-## 11. РИСКИ
-
-## 12. ВЫВОД
-### Главный инсайт:
-### Прогноз:
-"""
 
 def is_url(text: str) -> bool:
+    """Check if text is a URL"""
     return bool(re.match(r'https?://[^\s]+', text.strip()))
 
+
 async def download_from_url(url: str) -> str:
-    output_template = f"/tmp/ytdl_{datetime.now().timestamp()}.%(ext)s"
+    """Download video/audio from URL using yt-dlp"""
+    output_path = f"/tmp/ytdl_{int(datetime.now().timestamp())}"
     
     process = await asyncio.create_subprocess_exec(
         "yt-dlp", "-x", "--audio-format", "mp3",
-        "-o", output_template, "--no-playlist", "--max-filesize", "50M", url,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        "-o", f"{output_path}.%(ext)s",
+        "--no-playlist", "--max-filesize", "100M",
+        url,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
     )
     
-    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
+    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
     
     if process.returncode != 0:
-        raise Exception("Не удалось скачать видео")
+        print(f"yt-dlp error: {stderr.decode()}")
+        raise Exception("Не удалось скачать видео. Проверь ссылку.")
     
-    import glob
-    files = glob.glob(f"/tmp/ytdl_{datetime.now().timestamp()}*".replace(".%(ext)s", "") + "*")
-    if not files:
-        files = glob.glob("/tmp/ytdl_*")
-    
+    files = glob.glob(f"{output_path}.*")
     if files:
-        return sorted(files, key=os.path.getmtime)[-1]
-    raise Exception("Файл не найден")
+        return files[0]
+    raise Exception("Файл не найден после скачивания")
+
 
 async def get_audio_duration(file_path: str) -> int:
+    """Get audio duration in seconds using ffprobe"""
     try:
         process = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "error", "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", file_path,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            file_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
-        stdout, _ = await process.communicate()
-        return int(float(stdout.decode().strip()))
-    except:
+        stdout, stderr = await process.communicate()
+        
+        duration_str = stdout.decode().strip()
+        if duration_str:
+            duration = int(float(duration_str))
+            print(f"📊 ffprobe duration: {duration}s")
+            return duration
+        
+        print(f"⚠️ ffprobe empty output, stderr: {stderr.decode()}")
+        return 0
+    except Exception as e:
+        print(f"⚠️ ffprobe error: {e}")
         return 0
 
+
 async def transcribe_deepgram(file_path: str) -> str:
+    """Transcribe audio using Deepgram API"""
     async with httpx.AsyncClient(timeout=600.0) as client:
         with open(file_path, "rb") as f:
             response = await client.post(
@@ -181,29 +247,37 @@ async def transcribe_deepgram(file_path: str) -> str:
         result = response.json()
         return result["results"]["channels"][0]["alternatives"][0]["transcript"]
 
+
 def analyze_simple(transcript: str) -> str:
+    """Simple analysis for short audio"""
     response = openai_client.chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": SIMPLE_PROMPT},
             {"role": "user", "content": f"Транскрипт:\n\n{transcript}"}
         ],
-        max_tokens=1500, temperature=0.3
+        max_tokens=1500,
+        temperature=0.3
     )
     return response.choices[0].message.content
 
+
 def analyze_meeting(transcript: str) -> str:
+    """Full expert analysis for long meetings"""
     response = openai_client.chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": FULL_ANALYSIS_PROMPT},
-            {"role": "user", "content": f"Проанализируй:\n\n{transcript}"}
+            {"role": "user", "content": f"Проанализируй встречу:\n\n{transcript}"}
         ],
-        max_tokens=8000, temperature=0.4
+        max_tokens=8000,
+        temperature=0.4
     )
     return response.choices[0].message.content
 
+
 def create_full_pdf(analysis: str, output_path: str) -> None:
+    """Create stylish PDF report"""
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
         rightMargin=1.8*cm, leftMargin=1.8*cm,
@@ -218,58 +292,43 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
     LIGHT_BG = colors.HexColor('#f5f7fa')
     BLUE_BG = colors.HexColor('#e8f4fc')
     GRAY = colors.HexColor('#5a6a7a')
+    TEXT_COLOR = colors.HexColor('#333333')
     
     styles = getSampleStyleSheet()
     
-    # Title
+    # Custom styles
     styles.add(ParagraphStyle(
         name='Title1', fontName='Montserrat-Bold', fontSize=22,
         textColor=PRIMARY, alignment=1, spaceAfter=8
     ))
-    
-    # Subtitle  
     styles.add(ParagraphStyle(
         name='Subtitle1', fontName='Montserrat', fontSize=10,
         textColor=GRAY, alignment=1, spaceAfter=20
     ))
-    
-    # Section header
     styles.add(ParagraphStyle(
         name='Section', fontName='Montserrat-Bold', fontSize=13,
-        textColor=PRIMARY, spaceBefore=22, spaceAfter=10,
-        borderPadding=(8, 0, 8, 0)
+        textColor=PRIMARY, spaceBefore=22, spaceAfter=10
     ))
-    
-    # Subsection
     styles.add(ParagraphStyle(
         name='Subsection', fontName='Montserrat-Medium', fontSize=11,
         textColor=SECONDARY, spaceBefore=12, spaceAfter=6
     ))
-    
-    # Body
     styles.add(ParagraphStyle(
         name='Body1', fontName='Montserrat', fontSize=10,
-        textColor=colors.HexColor('#333333'), leading=15,
-        spaceBefore=3, spaceAfter=3
+        textColor=TEXT_COLOR, leading=15, spaceBefore=3, spaceAfter=3
     ))
-    
-    # Bullet
     styles.add(ParagraphStyle(
         name='Bullet1', fontName='Montserrat', fontSize=10,
-        textColor=colors.HexColor('#333333'), leading=15,
-        leftIndent=12, spaceBefore=2, spaceAfter=2
+        textColor=TEXT_COLOR, leading=15, leftIndent=12,
+        spaceBefore=2, spaceAfter=2
     ))
-    
-    # Summary box text
     styles.add(ParagraphStyle(
         name='SummaryBox', fontName='Montserrat', fontSize=10,
-        textColor=PRIMARY, leading=16, spaceBefore=5, spaceAfter=5
+        textColor=PRIMARY, leading=16
     ))
-    
-    # Recommendation
     styles.add(ParagraphStyle(
         name='Recommendation', fontName='Montserrat-Medium', fontSize=10,
-        textColor=BLUE, leading=15, leftIndent=8, spaceBefore=8, spaceAfter=8
+        textColor=BLUE, leading=15
     ))
     
     story = []
@@ -277,34 +336,27 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
     
     # Header
     story.append(Paragraph("АНАЛИЗ ВСТРЕЧИ", styles['Title1']))
-    story.append(Paragraph(f"Экспертный отчёт • {date_str}", styles['Subtitle1']))
+    story.append(Paragraph(f"Экспертный отчёт от Цифрового Умника • {date_str}", styles['Subtitle1']))
     story.append(HRFlowable(width="100%", thickness=2, color=ACCENT, spaceAfter=20))
     
     in_summary = False
     summary_lines = []
     
-    lines = analysis.split('\n')
-    i = 0
-    
-    while i < len(lines):
-        line = lines[i].strip()
-        i += 1
-        
+    for line in analysis.split('\n'):
+        line = line.strip()
         if not line:
             continue
         
-        # Executive Summary
+        # Executive Summary detection
         if 'EXECUTIVE SUMMARY' in line.upper():
             in_summary = True
             story.append(Paragraph("📋  EXECUTIVE SUMMARY", styles['Section']))
             continue
         
-        # End summary
+        # End of summary
         if line.startswith('## ') and in_summary:
             if summary_lines:
-                summary_text = ' '.join(summary_lines)
-                # Create summary box
-                tbl = Table([[Paragraph(summary_text, styles['SummaryBox'])]], colWidths=[16*cm])
+                tbl = Table([[Paragraph(' '.join(summary_lines), styles['SummaryBox'])]], colWidths=[16*cm])
                 tbl.setStyle(TableStyle([
                     ('BACKGROUND', (0, 0), (-1, -1), LIGHT_BG),
                     ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#dde3ea')),
@@ -332,10 +384,9 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
             title = line[4:].strip()
             story.append(Paragraph(title, styles['Subsection']))
         
-        # Recommendation
-        elif '[РЕКОМЕНДАЦИЯ]' in line or '[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]' in line:
-            clean = line.replace('[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]', '').replace('[РЕКОМЕНДАЦИЯ]', '').strip()
-            # Recommendation box
+        # Recommendation block
+        elif '[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]' in line:
+            clean = line.replace('[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]', '').strip()
             tbl = Table([[Paragraph(f"🧠 {clean}" if clean else "🧠 Рекомендация эксперта:", styles['Recommendation'])]], colWidths=[16*cm])
             tbl.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, -1), BLUE_BG),
@@ -351,7 +402,7 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
         elif line.startswith('- ') or line.startswith('• '):
             story.append(Paragraph(f"●  {line[2:]}", styles['Bullet1']))
         
-        # Numbered
+        # Numbered items
         elif len(line) > 2 and line[0].isdigit() and line[1] in '.):':
             story.append(Paragraph(f"    {line}", styles['Bullet1']))
         
@@ -361,15 +412,17 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
     
     # Footer
     story.append(Spacer(1, 25))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#dde3ea'), spaceBefore=10))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#dde3ea')))
     story.append(Paragraph("📌 Факты из встречи  •  🧠 Рекомендации Цифрового Умника", styles['Subtitle1']))
     
     doc.build(story)
 
+
 async def save_to_notion(title: str, content: str) -> str:
+    """Save analysis to Notion database"""
     print(f"📝 Notion: Starting save...")
     print(f"   NOTION_KEY present: {bool(NOTION_KEY)}")
-    print(f"   NOTION_DB: {NOTION_DB[:20]}..." if NOTION_DB else "   NOTION_DB: empty")
+    print(f"   NOTION_DB: {NOTION_DB[:20] if NOTION_DB else 'empty'}...")
     
     if not NOTION_KEY or not NOTION_DB:
         print("❌ Notion: Missing credentials")
@@ -388,13 +441,12 @@ async def save_to_notion(title: str, content: str) -> str:
             summary_text += line.strip() + " "
     summary_text = summary_text[:2000] or "Анализ встречи"
     
-    # Build blocks
+    # Build Notion blocks
     blocks = []
     for line in content.split('\n'):
         line = line.strip()
         if not line or len(blocks) >= 95:
             continue
-        
         line = line[:2000]
         
         if line.startswith('## '):
@@ -407,13 +459,14 @@ async def save_to_notion(title: str, content: str) -> str:
                 "object": "block", "type": "heading_3",
                 "heading_3": {"rich_text": [{"type": "text", "text": {"content": line[4:][:100]}}]}
             })
-        elif '[РЕКОМЕНДАЦИЯ' in line:
-            clean = line.replace('[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]', '').replace('[РЕКОМЕНДАЦИЯ]', '').strip()
+        elif '[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]' in line:
+            clean = line.replace('[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]', '').strip()
             blocks.append({
                 "object": "block", "type": "callout",
                 "callout": {
                     "rich_text": [{"type": "text", "text": {"content": clean or "Рекомендация"}}],
-                    "icon": {"emoji": "🧠"}, "color": "blue_background"
+                    "icon": {"emoji": "🧠"},
+                    "color": "blue_background"
                 }
             })
         elif line.startswith('- ') or line.startswith('• '):
@@ -427,16 +480,6 @@ async def save_to_notion(title: str, content: str) -> str:
                 "paragraph": {"rich_text": [{"type": "text", "text": {"content": line}}]}
             })
     
-    payload = {
-        "parent": {"database_id": NOTION_DB},
-        "properties": {
-            "Name": {"title": [{"text": {"content": title[:100]}}]},
-            "Meeting Date": {"date": {"start": datetime.now().strftime("%Y-%m-%d")}},
-            "summary": {"rich_text": [{"text": {"content": summary_text[:2000]}}]}
-        },
-        "children": blocks
-    }
-    
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
@@ -446,7 +489,15 @@ async def save_to_notion(title: str, content: str) -> str:
                     "Content-Type": "application/json",
                     "Notion-Version": "2022-06-28"
                 },
-                json=payload
+                json={
+                    "parent": {"database_id": NOTION_DB},
+                    "properties": {
+                        "Name": {"title": [{"text": {"content": title[:100]}}]},
+                        "Meeting Date": {"date": {"start": datetime.now().strftime("%Y-%m-%d")}},
+                        "summary": {"rich_text": [{"text": {"content": summary_text}}]}
+                    },
+                    "children": blocks
+                }
             )
             
             print(f"   Notion response: {response.status_code}")
@@ -463,40 +514,53 @@ async def save_to_notion(title: str, content: str) -> str:
         print(f"❌ Notion exception: {e}")
         return None
 
+
+# ============ HANDLERS ============
+
 @app.on_message(filters.command("start"))
 async def start_handler(client, message: Message):
-    await message.reply("""👋 Привет! Я — **Цифровой Умник**
+    welcome = """👋 Привет! Я — **Цифровой Умник**
+
+**Что я умею:**
 
 🎤 **Голосовое / короткое аудио** (до 10 мин)
-→ Саммари текстом
+→ Пришлю саммари текстом в чат
 
 🎬 **Длинные встречи** (от 10 мин)
-→ Полный анализ + PDF + Notion
+→ Полный экспертный анализ + PDF + Notion
 
-🔗 **Ссылка YouTube**
-→ Скачаю и обработаю
+🔗 **Ссылка на YouTube или видео**
+→ Скачаю, транскрибирую, обработаю
 
-Просто отправь файл или ссылку!""")
+**Просто отправь** аудио, видео или ссылку!
+
+🔒 Все файлы удаляются сразу после обработки."""
+    await message.reply(welcome)
+
 
 @app.on_message(filters.text & ~filters.command(["start"]))
 async def url_handler(client, message: Message):
+    """Handle URL messages"""
     text = message.text.strip()
     
     if not is_url(text):
         await message.reply("🤔 Отправь аудио/видео или ссылку на YouTube")
         return
     
-    status = await message.reply("🔗 Скачиваю...")
+    status = await message.reply("🔗 Скачиваю видео...")
     
     try:
         file_path = await download_from_url(text)
-        await process_audio(message, status, file_path)
+        # URL = always full analysis
+        await process_audio(message, status, file_path, force_full=True)
     except Exception as e:
-        await status.edit_text(f"❌ {e}")
+        await status.edit_text(f"❌ {str(e)}")
+
 
 @app.on_message(filters.audio | filters.video | filters.document | filters.voice | filters.video_note)
 async def media_handler(client, message: Message):
-    status = await message.reply("⏳ Скачиваю...")
+    """Handle media files"""
+    status = await message.reply("⏳ Скачиваю файл...")
     
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
@@ -507,41 +571,75 @@ async def media_handler(client, message: Message):
         await process_audio(message, status, file_path, is_voice=is_voice)
         
     except Exception as e:
-        await status.edit_text(f"❌ {e}")
+        await status.edit_text(f"❌ Ошибка: {str(e)}")
 
-async def process_audio(message: Message, status: Message, file_path: str, is_voice: bool = False):
+
+async def process_audio(message: Message, status: Message, file_path: str, is_voice: bool = False, force_full: bool = False):
+    """Main processing function"""
     try:
+        # Get duration
         duration = await get_audio_duration(file_path)
-        print(f"📊 Duration: {duration}s, is_voice: {is_voice}")
         
-        await status.edit_text("🎙 Транскрибирую...")
+        await status.edit_text("🎙 Транскрибирую аудио...")
         transcript = await transcribe_deepgram(file_path)
         
         if len(transcript) < 50:
-            await status.edit_text("⚠️ Не удалось распознать речь")
+            await status.edit_text("⚠️ Не удалось распознать речь. Попробуй другой файл.")
             os.unlink(file_path)
             return
         
-        is_short = is_voice or duration < SHORT_DURATION_SECONDS
+        transcript_len = len(transcript)
+        print(f"📊 Duration: {duration}s | Transcript: {transcript_len} chars | Voice: {is_voice} | Force full: {force_full}")
         
+        # ============ DECISION LOGIC ============
+        # FULL analysis if:
+        #   - force_full=True (URL)
+        #   - duration >= 10 min (600s)
+        #   - transcript is long (>3000 chars) even if duration unknown
+        # SIMPLE if:
+        #   - voice/video_note message
+        #   - short duration AND short transcript
+        
+        is_short = False
+        
+        if is_voice:
+            # Voice messages are always short
+            is_short = True
+        elif force_full:
+            # URL = always full
+            is_short = False
+        elif duration >= SHORT_DURATION_SECONDS:
+            # 10+ minutes = full
+            is_short = False
+        elif duration > 0 and duration < SHORT_DURATION_SECONDS:
+            # Known duration < 10 min = short
+            is_short = True
+        elif transcript_len >= SHORT_TRANSCRIPT_CHARS:
+            # Unknown duration but long transcript = full
+            is_short = False
+        else:
+            # Default to short
+            is_short = True
+        
+        print(f"📊 Decision: {'SIMPLE (text)' if is_short else 'FULL (PDF + Notion)'}")
+        
+        # ============ PROCESS ============
         if is_short:
+            # Simple text response
             await status.edit_text("📝 Готовлю саммари...")
             summary = analyze_simple(transcript)
             
             await status.delete()
             await message.reply(summary)
-            os.unlink(file_path)
             
         else:
-            fonts_ok = await download_fonts()
-            if not fonts_ok:
-                await status.edit_text("❌ Ошибка загрузки шрифтов")
-                return
+            # Full analysis with PDF and Notion
+            await download_fonts()
             
-            await status.edit_text("🧠 Анализирую встречу...")
+            await status.edit_text("🧠 Цифровой Умник анализирует встречу...")
             analysis = analyze_meeting(transcript)
             
-            await status.edit_text("📄 Создаю PDF...")
+            await status.edit_text("📄 Создаю PDF отчёт...")
             pdf_path = file_path + ".pdf"
             create_full_pdf(analysis, pdf_path)
             
@@ -549,23 +647,31 @@ async def process_audio(message: Message, status: Message, file_path: str, is_vo
             title = f"Встреча {datetime.now().strftime('%d.%m.%Y %H:%M')}"
             notion_url = await save_to_notion(title, analysis)
             
-            caption = "📊 **Анализ от Цифрового Умника**"
+            # Build caption
+            caption = "📊 **Экспертный анализ от Цифрового Умника**"
             if notion_url:
                 caption += f"\n\n🔗 [Открыть в Notion]({notion_url})"
             else:
-                caption += "\n\n⚠️ Notion: не удалось сохранить"
+                caption += "\n\n⚠️ Notion: проверь настройки интеграции"
             
             await status.delete()
             await message.reply_document(pdf_path, caption=caption)
             
+            # Cleanup PDF
+            if os.path.exists(pdf_path):
+                os.unlink(pdf_path)
+        
+        # Cleanup source file
+        if os.path.exists(file_path):
             os.unlink(file_path)
-            os.unlink(pdf_path)
         
     except Exception as e:
-        print(f"❌ Error: {e}")
-        await status.edit_text(f"❌ {e}")
+        print(f"❌ Processing error: {e}")
+        await status.edit_text(f"❌ Ошибка: {str(e)}")
         if os.path.exists(file_path):
             os.unlink(file_path)
 
+
+# ============ START ============
 print("🧠 Цифровой Умник запущен!")
 app.run()
