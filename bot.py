@@ -252,7 +252,19 @@ def analyze_meeting(transcript: str) -> str:
         temperature=0.4
     )
     return response.choices[0].message.content
-
+    
+def generate_topic(transcript: str) -> str:
+    """Generate short meeting topic from transcript"""
+    response = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Сгенерируй краткое название темы встречи (3-5 слов). Только название, без кавычек и пояснений."},
+            {"role": "user", "content": transcript[:3000]}
+        ],
+        max_tokens=30,
+        temperature=0.3
+    )
+    return response.choices[0].message.content.strip()
 
 def create_full_pdf(analysis: str, output_path: str) -> None:
     doc = SimpleDocTemplate(
