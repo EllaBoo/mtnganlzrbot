@@ -34,7 +34,6 @@ FONT_BOLD = "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Monts
 FONT_MEDIUM = "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Medium.ttf"
 
 # ============ THRESHOLDS ============
-SHORT_DURATION_SECONDS = 600  # 10 minutes
 SHORT_TRANSCRIPT_CHARS = 3000  # ~5 min of speech
 
 # ============ PROMPTS ============
@@ -154,7 +153,6 @@ FULL_ANALYSIS_PROMPT = """Ты — senior бизнес-консультант, �
 # ============ HELPERS ============
 
 async def download_fonts():
-    """Download and register Montserrat fonts"""
     fonts = [
         ("Montserrat", FONT_REGULAR, "/tmp/Montserrat-Regular.ttf"),
         ("Montserrat-Bold", FONT_BOLD, "/tmp/Montserrat-Bold.ttf"),
@@ -168,9 +166,8 @@ async def download_fonts():
                     r = await client.get(url)
                     with open(path, 'wb') as f:
                         f.write(r.content)
-                    print(f"✅ Downloaded {name}")
                 except Exception as e:
-                    print(f"❌ Font download failed {name}: {e}")
+                    print(f"❌ Font error {name}: {e}")
                     return False
             try:
                 pdfmetrics.registerFont(TTFont(name, path))
@@ -180,32 +177,16 @@ async def download_fonts():
 
 
 def is_url(text: str) -> bool:
-    """Check if text is a URL"""
     return bool(re.match(r'https?://[^\s]+', text.strip()))
 
 
 async def download_from_url(url: str) -> str:
-    """Download video/audio from URL using yt-dlp"""
-    
-    # Update yt-dlp first (YouTube often changes)
-    update_proc = await asyncio.create_subprocess_exec(
-        "pip", "install", "-U", "yt-dlp",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
-    )
-    await update_proc.communicate()
-    
     output_path = f"/tmp/ytdl_{int(datetime.now().timestamp())}"
     
     process = await asyncio.create_subprocess_exec(
-        "yt-dlp",
-        "-x", "--audio-format", "mp3",
+        "yt-dlp", "-x", "--audio-format", "mp3",
         "-o", f"{output_path}.%(ext)s",
-        "--no-playlist",
-        "--max-filesize", "100M",
-        "--no-check-certificates",
-        "--geo-bypass",
-        "--extractor-retries", "3",
+        "--no-playlist", "--max-filesize", "100M",
         url,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
@@ -214,62 +195,40 @@ async def download_from_url(url: str) -> str:
     stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
     
     if process.returncode != 0:
-        error_msg = stderr.decode()[:200]
         print(f"yt-dlp error: {stderr.decode()}")
-        raise Exception(f"Не удалось скачать: {error_msg}")
+        raise Exception("Не удалось скачать видео")
     
     files = glob.glob(f"{output_path}.*")
     if files:
         return files[0]
-    raise Exception("Файл не найден после скачивания")
-    
-    files = glob.glob(f"{output_path}.*")
-    if files:
-        return files[0]
-    raise Exception("Файл не найден после скачивания")
-
-
-async def get_audio_duration(file_path: str) -> int:
-    """Get audio duration in seconds using ffprobe"""
-    try:
-        process = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            file_path,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-        
-        duration_str = stdout.decode().strip()
-        if duration_str:
-            duration = int(float(duration_str))
-            print(f"📊 ffprobe duration: {duration}s")
-            return duration
-        
-        print(f"⚠️ ffprobe empty output, stderr: {stderr.decode()}")
-        return 0
-    except Exception as e:
-        print(f"⚠️ ffprobe error: {e}")
-        return 0
+    raise Exception("Файл не найден")
 
 
 async def transcribe_deepgram(file_path: str) -> str:
-    """Transcribe audio using Deepgram API"""
-    async with httpx.AsyncClient(timeout=600.0) as client:
+    file_size = os.path.getsize(file_path)
+    print(f"📤 Deepgram: uploading {file_size / 1024 / 1024:.1f} MB")
+    
+    async with httpx.AsyncClient(timeout=1200.0) as client:
         with open(file_path, "rb") as f:
             response = await client.post(
                 "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&diarize=true&language=ru",
                 headers={"Authorization": f"Token {DEEPGRAM_KEY}"},
                 content=f.read()
             )
+        
+        print(f"📥 Deepgram response: {response.status_code}")
+        
+        if response.status_code != 200:
+            print(f"Deepgram error: {response.text}")
+            raise Exception("Ошибка транскрибации")
+        
         result = response.json()
-        return result["results"]["channels"][0]["alternatives"][0]["transcript"]
+        transcript = result["results"]["channels"][0]["alternatives"][0]["transcript"]
+        print(f"📝 Transcript: {len(transcript)} chars")
+        return transcript
 
 
 def analyze_simple(transcript: str) -> str:
-    """Simple analysis for short audio"""
     response = openai_client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -283,7 +242,6 @@ def analyze_simple(transcript: str) -> str:
 
 
 def analyze_meeting(transcript: str) -> str:
-    """Full expert analysis for long meetings"""
     response = openai_client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -297,14 +255,12 @@ def analyze_meeting(transcript: str) -> str:
 
 
 def create_full_pdf(analysis: str, output_path: str) -> None:
-    """Create stylish PDF report"""
     doc = SimpleDocTemplate(
         output_path, pagesize=A4,
         rightMargin=1.8*cm, leftMargin=1.8*cm,
         topMargin=1.5*cm, bottomMargin=1.5*cm
     )
     
-    # Colors
     PRIMARY = colors.HexColor('#1a1a2e')
     SECONDARY = colors.HexColor('#16213e')
     ACCENT = colors.HexColor('#0f3460')
@@ -316,7 +272,6 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
     
     styles = getSampleStyleSheet()
     
-    # Custom styles
     styles.add(ParagraphStyle(
         name='Title1', fontName='Montserrat-Bold', fontSize=22,
         textColor=PRIMARY, alignment=1, spaceAfter=8
@@ -354,7 +309,6 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
     story = []
     date_str = datetime.now().strftime("%d.%m.%Y в %H:%M")
     
-    # Header
     story.append(Paragraph("АНАЛИЗ ВСТРЕЧИ", styles['Title1']))
     story.append(Paragraph(f"Экспертный отчёт от Цифрового Умника • {date_str}", styles['Subtitle1']))
     story.append(HRFlowable(width="100%", thickness=2, color=ACCENT, spaceAfter=20))
@@ -367,13 +321,11 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
         if not line:
             continue
         
-        # Executive Summary detection
         if 'EXECUTIVE SUMMARY' in line.upper():
             in_summary = True
             story.append(Paragraph("📋  EXECUTIVE SUMMARY", styles['Section']))
             continue
         
-        # End of summary
         if line.startswith('## ') and in_summary:
             if summary_lines:
                 tbl = Table([[Paragraph(' '.join(summary_lines), styles['SummaryBox'])]], colWidths=[16*cm])
@@ -394,17 +346,12 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
             summary_lines.append(line)
             continue
         
-        # Section headers ##
         if line.startswith('## '):
             title = line[3:].strip().upper()
             story.append(Paragraph(f"▌ {title}", styles['Section']))
-        
-        # Subsection ###
         elif line.startswith('### '):
             title = line[4:].strip()
             story.append(Paragraph(title, styles['Subsection']))
-        
-        # Recommendation block
         elif '[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]' in line:
             clean = line.replace('[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]', '').strip()
             tbl = Table([[Paragraph(f"🧠 {clean}" if clean else "🧠 Рекомендация эксперта:", styles['Recommendation'])]], colWidths=[16*cm])
@@ -417,20 +364,13 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
                 ('RIGHTPADDING', (0, 0), (-1, -1), 12),
             ]))
             story.append(tbl)
-        
-        # Bullets
         elif line.startswith('- ') or line.startswith('• '):
             story.append(Paragraph(f"●  {line[2:]}", styles['Bullet1']))
-        
-        # Numbered items
         elif len(line) > 2 and line[0].isdigit() and line[1] in '.):':
             story.append(Paragraph(f"    {line}", styles['Bullet1']))
-        
-        # Regular text
         else:
             story.append(Paragraph(line, styles['Body1']))
     
-    # Footer
     story.append(Spacer(1, 25))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#dde3ea')))
     story.append(Paragraph("📌 Факты из встречи  •  🧠 Рекомендации Цифрового Умника", styles['Subtitle1']))
@@ -439,16 +379,9 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
 
 
 async def save_to_notion(title: str, content: str) -> str:
-    """Save analysis to Notion database"""
-    print(f"📝 Notion: Starting save...")
-    print(f"   NOTION_KEY present: {bool(NOTION_KEY)}")
-    print(f"   NOTION_DB: {NOTION_DB[:20] if NOTION_DB else 'empty'}...")
-    
     if not NOTION_KEY or not NOTION_DB:
-        print("❌ Notion: Missing credentials")
         return None
     
-    # Extract summary
     summary_text = ""
     in_sum = False
     for line in content.split('\n'):
@@ -461,7 +394,6 @@ async def save_to_notion(title: str, content: str) -> str:
             summary_text += line.strip() + " "
     summary_text = summary_text[:2000] or "Анализ встречи"
     
-    # Build Notion blocks
     blocks = []
     for line in content.split('\n'):
         line = line.strip()
@@ -520,66 +452,45 @@ async def save_to_notion(title: str, content: str) -> str:
                 }
             )
             
-            print(f"   Notion response: {response.status_code}")
-            
             if response.status_code == 200:
-                url = response.json().get("url")
-                print(f"✅ Notion: Created {url}")
-                return url
-            else:
-                print(f"❌ Notion error: {response.text[:500]}")
-                return None
-                
+                return response.json().get("url")
     except Exception as e:
-        print(f"❌ Notion exception: {e}")
-        return None
+        print(f"Notion error: {e}")
+    return None
 
 
 # ============ HANDLERS ============
 
 @app.on_message(filters.command("start"))
 async def start_handler(client, message: Message):
-    welcome = """👋 Привет! Я — **Цифровой Умник**
+    await message.reply("""👋 Привет! Я — **Цифровой Умник**
 
-**Что я умею:**
+🎤 **Короткое аудио** (до 5 мин) → саммари текстом
+🎬 **Длинные встречи** (от 5 мин) → PDF + Notion
+🔗 **YouTube ссылка** → скачаю и обработаю
 
-🎤 **Голосовое / короткое аудио** (до 10 мин)
-→ Пришлю саммари текстом в чат
-
-🎬 **Длинные встречи** (от 10 мин)
-→ Полный экспертный анализ + PDF + Notion
-
-🔗 **Ссылка на YouTube или видео**
-→ Скачаю, транскрибирую, обработаю
-
-**Просто отправь** аудио, видео или ссылку!
-
-🔒 Все файлы удаляются сразу после обработки."""
-    await message.reply(welcome)
+Просто отправь файл или ссылку!""")
 
 
 @app.on_message(filters.text & ~filters.command(["start"]))
 async def url_handler(client, message: Message):
-    """Handle URL messages"""
     text = message.text.strip()
     
     if not is_url(text):
-        await message.reply("🤔 Отправь аудио/видео или ссылку на YouTube")
+        await message.reply("🤔 Отправь аудио/видео или ссылку")
         return
     
     status = await message.reply("🔗 Скачиваю видео...")
     
     try:
         file_path = await download_from_url(text)
-        # URL = always full analysis
         await process_audio(message, status, file_path, force_full=True)
     except Exception as e:
-        await status.edit_text(f"❌ {str(e)}")
+        await status.edit_text(f"❌ {e}")
 
 
 @app.on_message(filters.audio | filters.video | filters.document | filters.voice | filters.video_note)
 async def media_handler(client, message: Message):
-    """Handle media files"""
     status = await message.reply("⏳ Скачиваю файл...")
     
     try:
@@ -591,75 +502,47 @@ async def media_handler(client, message: Message):
         await process_audio(message, status, file_path, is_voice=is_voice)
         
     except Exception as e:
-        await status.edit_text(f"❌ Ошибка: {str(e)}")
+        await status.edit_text(f"❌ {e}")
 
 
 async def process_audio(message: Message, status: Message, file_path: str, is_voice: bool = False, force_full: bool = False):
-    """Main processing function"""
     try:
-        # Get duration
-        duration = await get_audio_duration(file_path)
-        
         await status.edit_text("🎙 Транскрибирую аудио...")
         transcript = await transcribe_deepgram(file_path)
         
         if len(transcript) < 50:
-            await status.edit_text("⚠️ Не удалось распознать речь. Попробуй другой файл.")
+            await status.edit_text("⚠️ Не удалось распознать речь")
             os.unlink(file_path)
             return
         
         transcript_len = len(transcript)
-        print(f"📊 Duration: {duration}s | Transcript: {transcript_len} chars | Voice: {is_voice} | Force full: {force_full}")
+        print(f"📊 Transcript: {transcript_len} chars | Voice: {is_voice} | Force full: {force_full}")
         
-        # ============ DECISION LOGIC ============
-        # FULL analysis if:
-        #   - force_full=True (URL)
-        #   - duration >= 10 min (600s)
-        #   - transcript is long (>3000 chars) even if duration unknown
-        # SIMPLE if:
-        #   - voice/video_note message
-        #   - short duration AND short transcript
-        
+        # Логика выбора режима
         is_short = False
-        
         if is_voice:
-            # Voice messages are always short
             is_short = True
         elif force_full:
-            # URL = always full
             is_short = False
-        elif duration >= SHORT_DURATION_SECONDS:
-            # 10+ minutes = full
-            is_short = False
-        elif duration > 0 and duration < SHORT_DURATION_SECONDS:
-            # Known duration < 10 min = short
-            is_short = True
         elif transcript_len >= SHORT_TRANSCRIPT_CHARS:
-            # Unknown duration but long transcript = full
             is_short = False
         else:
-            # Default to short
             is_short = True
         
-        print(f"📊 Decision: {'SIMPLE (text)' if is_short else 'FULL (PDF + Notion)'}")
+        print(f"📊 Mode: {'SIMPLE' if is_short else 'FULL'}")
         
-        # ============ PROCESS ============
         if is_short:
-            # Simple text response
             await status.edit_text("📝 Готовлю саммари...")
             summary = analyze_simple(transcript)
-            
             await status.delete()
             await message.reply(summary)
-            
         else:
-            # Full analysis with PDF and Notion
             await download_fonts()
             
-            await status.edit_text("🧠 Цифровой Умник анализирует встречу...")
+            await status.edit_text("🧠 Анализирую встречу...")
             analysis = analyze_meeting(transcript)
             
-            await status.edit_text("📄 Создаю PDF отчёт...")
+            await status.edit_text("📄 Создаю PDF...")
             pdf_path = file_path + ".pdf"
             create_full_pdf(analysis, pdf_path)
             
@@ -667,31 +550,25 @@ async def process_audio(message: Message, status: Message, file_path: str, is_vo
             title = f"Встреча {datetime.now().strftime('%d.%m.%Y %H:%M')}"
             notion_url = await save_to_notion(title, analysis)
             
-            # Build caption
-            caption = "📊 **Экспертный анализ от Цифрового Умника**"
+            caption = "📊 **Анализ от Цифрового Умника**"
             if notion_url:
                 caption += f"\n\n🔗 [Открыть в Notion]({notion_url})"
-            else:
-                caption += "\n\n⚠️ Notion: проверь настройки интеграции"
             
             await status.delete()
             await message.reply_document(pdf_path, caption=caption)
             
-            # Cleanup PDF
             if os.path.exists(pdf_path):
                 os.unlink(pdf_path)
         
-        # Cleanup source file
         if os.path.exists(file_path):
             os.unlink(file_path)
         
     except Exception as e:
-        print(f"❌ Processing error: {e}")
-        await status.edit_text(f"❌ Ошибка: {str(e)}")
+        print(f"❌ Error: {e}")
+        await status.edit_text(f"❌ {e}")
         if os.path.exists(file_path):
             os.unlink(file_path)
 
 
-# ============ START ============
 print("🧠 Цифровой Умник запущен!")
 app.run()
