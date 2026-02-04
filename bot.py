@@ -183,18 +183,18 @@ def is_url(text: str) -> bool:
 async def download_from_url(url: str) -> str:
     output_path = f"/tmp/ytdl_{int(datetime.now().timestamp())}"
     
-    process = await asyncio.create_subprocess_exec(
+     = await asyncio.create_sub_exec(
         "yt-dlp", "-x", "--audio-format", "mp3",
         "-o", f"{output_path}.%(ext)s",
         "--no-playlist", "--max-filesize", "100M",
         url,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
+        stdout=asyncio.sub.PIPE,
+        stderr=asyncio.sub.PIPE
     )
     
-    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
+    stdout, stderr = await asyncio.wait_for(.communicate(), timeout=600)
     
-    if process.returncode != 0:
+    if .returncode != 0:
         print(f"yt-dlp error: {stderr.decode()}")
         raise Exception("Не удалось скачать видео")
     
@@ -484,7 +484,7 @@ async def url_handler(client, message: Message):
     
     try:
         file_path = await download_from_url(text)
-        await process_audio(message, status, file_path, force_full=True)
+        await _audio(message, status, file_path, force_full=True)
     except Exception as e:
         await status.edit_text(f"❌ {e}")
 
@@ -542,20 +542,29 @@ async def process_audio(message: Message, status: Message, file_path: str, is_vo
             await status.edit_text("🧠 Анализирую встречу...")
             analysis = analyze_meeting(transcript)
             
+            # Генерируем название темы
             await status.edit_text("📄 Создаю PDF...")
-            pdf_path = file_path + ".pdf"
+            topic = generate_topic(transcript)
+            date_str = datetime.now().strftime('%d.%m.%Y')
+            
+            # Безопасное имя файла
+            safe_topic = "".join(c for c in topic if c.isalnum() or c in (' ', '-', '_')).strip()
+            safe_topic = safe_topic[:50]  # Ограничиваем длину
+            filename = f"{safe_topic}_{date_str}.pdf"
+            
+            pdf_path = f"/tmp/{filename}"
             create_full_pdf(analysis, pdf_path)
             
             await status.edit_text("📝 Сохраняю в Notion...")
-            title = f"Встреча {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+            title = f"{topic} — {date_str}"
             notion_url = await save_to_notion(title, analysis)
             
-            caption = "📊 **Анализ от Цифрового Умника**"
+            caption = f"📊 **{topic}**\n📅 {date_str}"
             if notion_url:
                 caption += f"\n\n🔗 [Открыть в Notion]({notion_url})"
             
             await status.delete()
-            await message.reply_document(pdf_path, caption=caption)
+            await message.reply_document(pdf_path, file_name=filename, caption=caption)
             
             if os.path.exists(pdf_path):
                 os.unlink(pdf_path)
@@ -568,7 +577,6 @@ async def process_audio(message: Message, status: Message, file_path: str, is_vo
         await status.edit_text(f"❌ {e}")
         if os.path.exists(file_path):
             os.unlink(file_path)
-
 
 print("🧠 Цифровой Умник запущен!")
 app.run()
