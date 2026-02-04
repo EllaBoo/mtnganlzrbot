@@ -1,10 +1,3 @@
-Ошибка отступов на строке 186. Давай заменим весь файл:
-
-👉 https://github.com/EllaBoo/mtnganlzrbot/edit/main/bot.py
-
-**Удали ВСЁ**, вставь:
-
-```python
 import os
 import re
 import asyncio
@@ -519,6 +512,3 @@ async def process_audio(message: Message, status: Message, file_path: str, is_vo
 
 print("🧠 Цифровой Умник запущен!")
 app.run()
-```
-
-**Commit changes**
