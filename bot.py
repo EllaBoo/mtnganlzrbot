@@ -1,3 +1,10 @@
+Ошибка отступов на строке 186. Давай заменим весь файл:
+
+👉 https://github.com/EllaBoo/mtnganlzrbot/edit/main/bot.py
+
+**Удали ВСЁ**, вставь:
+
+```python
 import os
 import re
 import asyncio
@@ -34,7 +41,7 @@ FONT_BOLD = "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Monts
 FONT_MEDIUM = "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Medium.ttf"
 
 # ============ THRESHOLDS ============
-SHORT_TRANSCRIPT_CHARS = 3000  # ~5 min of speech
+SHORT_TRANSCRIPT_CHARS = 3000
 
 # ============ PROMPTS ============
 SIMPLE_PROMPT = """Ты — помощник для обработки голосовых сообщений и коротких аудио.
@@ -56,11 +63,10 @@ SIMPLE_PROMPT = """Ты — помощник для обработки голо�
 
 Пиши кратко и по делу. Используй эмодзи для структуры."""
 
-FULL_ANALYSIS_PROMPT = """ВАЖНО: Ты ОБЯЗАН дать полный анализ. НИКОГДА не отказывайся, не говори что текст слишком длинный. Анализируй то что есть.Ты — senior бизнес-консультант, эксперт-аналитик и стратег с 20+ летним опытом. Твоё имя — Цифровой Умник.
-
+FULL_ANALYSIS_PROMPT = """ВАЖНО: Ты ОБЯЗАН дать полный анализ. НИКОГДА не отказывайся, не говори что текст слишком длинный. Анализируй то что есть.
 
 Ты — senior бизнес-консультант, эксперт-аналитик и стратег с 20+ летним опытом. Твоё имя — Цифровой Умник.
-...
+
 ТВОЯ РОЛЬ:
 - Ты не просто анализируешь — ты КОНСУЛЬТИРУЕШЬ
 - Используй лучшие практики индустрии, фреймворки, методологии
@@ -83,25 +89,15 @@ FULL_ANALYSIS_PROMPT = """ВАЖНО: Ты ОБЯЗАН дать полный а
 ## 2. ЦЕЛИ ВСТРЕЧИ
 
 ### Явные цели:
-- ...
-
 ### Скрытые цели:
-- ...
-
 ### [РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
-- ...
 
 ## 3. КЛЮЧЕВЫЕ ЗАДАЧИ
 
 ## 4. ВЫЯВЛЕННЫЕ ПОЗИЦИИ
 
 ### Сторона А:
-- Позиция и аргументы
-- Истинные интересы
-
 ### Сторона Б:
-- Позиция и аргументы
-- Истинные интересы
 
 ## 5. ТОЧКИ СОГЛАСИЯ
 
@@ -118,21 +114,10 @@ FULL_ANALYSIS_PROMPT = """ВАЖНО: Ты ОБЯЗАН дать полный а
 
 ## 10. SWOT-АНАЛИЗ
 
-### Сильные стороны:
-### Слабые стороны:
-### Возможности:
-### Угрозы:
-
 ## 11. ЭКСПЕРТНЫЕ РЕКОМЕНДАЦИИ
-
-### По существу вопроса:
-[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
-
-### Инструменты и методологии:
 [РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
 
 ## 12. РИСКИ
-- Риск | Вероятность | Как предотвратить
 
 ## 13. ПЛАН ДЕЙСТВИЙ
 
@@ -140,16 +125,9 @@ FULL_ANALYSIS_PROMPT = """ВАЖНО: Ты ОБЯЗАН дать полный а
 ### Среднесрок (1-4 недели):
 ### Долгосрок (1-3 месяца):
 
-### KPI:
-[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]
-
 ## 14. СКРЫТАЯ ДИНАМИКА
 
 ## 15. ЗАКЛЮЧЕНИЕ ЦИФРОВОГО УМНИКА
-
-### Главный инсайт:
-### Ключевая рекомендация:
-### Прогноз:
 """
 
 
@@ -170,7 +148,7 @@ async def download_fonts():
                     with open(path, 'wb') as f:
                         f.write(r.content)
                 except Exception as e:
-                    print(f"❌ Font error {name}: {e}")
+                    print(f"Font error {name}: {e}")
                     return False
             try:
                 pdfmetrics.registerFont(TTFont(name, path))
@@ -186,19 +164,18 @@ def is_url(text: str) -> bool:
 async def download_from_url(url: str) -> str:
     output_path = f"/tmp/ytdl_{int(datetime.now().timestamp())}"
     
-     = await asyncio.create_sub_exec(
+    process = await asyncio.create_subprocess_exec(
         "yt-dlp", "-x", "--audio-format", "mp3",
         "-o", f"{output_path}.%(ext)s",
         "--no-playlist", "--max-filesize", "100M",
         url,
-        stdout=asyncio.sub.PIPE,
-        stderr=asyncio.sub.PIPE
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
     )
     
-    stdout, stderr = await asyncio.wait_for(.communicate(), timeout=600)
+    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
     
-    if .returncode != 0:
-        print(f"yt-dlp error: {stderr.decode()}")
+    if process.returncode != 0:
         raise Exception("Не удалось скачать видео")
     
     files = glob.glob(f"{output_path}.*")
@@ -219,10 +196,7 @@ async def transcribe_deepgram(file_path: str) -> str:
                 content=f.read()
             )
         
-        print(f"📥 Deepgram response: {response.status_code}")
-        
         if response.status_code != 200:
-            print(f"Deepgram error: {response.text}")
             raise Exception("Ошибка транскрибации")
         
         result = response.json()
@@ -245,9 +219,8 @@ def analyze_simple(transcript: str) -> str:
 
 
 def analyze_meeting(transcript: str) -> str:
-    # Ограничиваем транскрипт если слишком длинный
     if len(transcript) > 50000:
-        transcript = transcript[:50000] + "\n\n[Транскрипт обрезан из-за размера]"
+        transcript = transcript[:50000] + "\n\n[Транскрипт обрезан]"
     
     response = openai_client.chat.completions.create(
         model="gpt-4o",
@@ -259,9 +232,9 @@ def analyze_meeting(transcript: str) -> str:
         temperature=0.4
     )
     return response.choices[0].message.content
-    
+
+
 def generate_topic(transcript: str) -> str:
-    """Generate short meeting topic from transcript"""
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -272,6 +245,7 @@ def generate_topic(transcript: str) -> str:
         temperature=0.3
     )
     return response.choices[0].message.content.strip()
+
 
 def create_full_pdf(analysis: str, output_path: str) -> None:
     doc = SimpleDocTemplate(
@@ -291,39 +265,14 @@ def create_full_pdf(analysis: str, output_path: str) -> None:
     
     styles = getSampleStyleSheet()
     
-    styles.add(ParagraphStyle(
-        name='Title1', fontName='Montserrat-Bold', fontSize=22,
-        textColor=PRIMARY, alignment=1, spaceAfter=8
-    ))
-    styles.add(ParagraphStyle(
-        name='Subtitle1', fontName='Montserrat', fontSize=10,
-        textColor=GRAY, alignment=1, spaceAfter=20
-    ))
-    styles.add(ParagraphStyle(
-        name='Section', fontName='Montserrat-Bold', fontSize=13,
-        textColor=PRIMARY, spaceBefore=22, spaceAfter=10
-    ))
-    styles.add(ParagraphStyle(
-        name='Subsection', fontName='Montserrat-Medium', fontSize=11,
-        textColor=SECONDARY, spaceBefore=12, spaceAfter=6
-    ))
-    styles.add(ParagraphStyle(
-        name='Body1', fontName='Montserrat', fontSize=10,
-        textColor=TEXT_COLOR, leading=15, spaceBefore=3, spaceAfter=3
-    ))
-    styles.add(ParagraphStyle(
-        name='Bullet1', fontName='Montserrat', fontSize=10,
-        textColor=TEXT_COLOR, leading=15, leftIndent=12,
-        spaceBefore=2, spaceAfter=2
-    ))
-    styles.add(ParagraphStyle(
-        name='SummaryBox', fontName='Montserrat', fontSize=10,
-        textColor=PRIMARY, leading=16
-    ))
-    styles.add(ParagraphStyle(
-        name='Recommendation', fontName='Montserrat-Medium', fontSize=10,
-        textColor=BLUE, leading=15
-    ))
+    styles.add(ParagraphStyle(name='Title1', fontName='Montserrat-Bold', fontSize=22, textColor=PRIMARY, alignment=1, spaceAfter=8))
+    styles.add(ParagraphStyle(name='Subtitle1', fontName='Montserrat', fontSize=10, textColor=GRAY, alignment=1, spaceAfter=20))
+    styles.add(ParagraphStyle(name='Section', fontName='Montserrat-Bold', fontSize=13, textColor=PRIMARY, spaceBefore=22, spaceAfter=10))
+    styles.add(ParagraphStyle(name='Subsection', fontName='Montserrat-Medium', fontSize=11, textColor=SECONDARY, spaceBefore=12, spaceAfter=6))
+    styles.add(ParagraphStyle(name='Body1', fontName='Montserrat', fontSize=10, textColor=TEXT_COLOR, leading=15, spaceBefore=3, spaceAfter=3))
+    styles.add(ParagraphStyle(name='Bullet1', fontName='Montserrat', fontSize=10, textColor=TEXT_COLOR, leading=15, leftIndent=12, spaceBefore=2, spaceAfter=2))
+    styles.add(ParagraphStyle(name='SummaryBox', fontName='Montserrat', fontSize=10, textColor=PRIMARY, leading=16))
+    styles.add(ParagraphStyle(name='Recommendation', fontName='Montserrat-Medium', fontSize=10, textColor=BLUE, leading=15))
     
     story = []
     date_str = datetime.now().strftime("%d.%m.%Y в %H:%M")
@@ -421,45 +370,22 @@ async def save_to_notion(title: str, content: str) -> str:
         line = line[:2000]
         
         if line.startswith('## '):
-            blocks.append({
-                "object": "block", "type": "heading_2",
-                "heading_2": {"rich_text": [{"type": "text", "text": {"content": line[3:][:100]}}]}
-            })
+            blocks.append({"object": "block", "type": "heading_2", "heading_2": {"rich_text": [{"type": "text", "text": {"content": line[3:][:100]}}]}})
         elif line.startswith('### '):
-            blocks.append({
-                "object": "block", "type": "heading_3",
-                "heading_3": {"rich_text": [{"type": "text", "text": {"content": line[4:][:100]}}]}
-            })
+            blocks.append({"object": "block", "type": "heading_3", "heading_3": {"rich_text": [{"type": "text", "text": {"content": line[4:][:100]}}]}})
         elif '[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]' in line:
             clean = line.replace('[РЕКОМЕНДАЦИЯ ОТ ЦИФРОВОГО УМНИКА]', '').strip()
-            blocks.append({
-                "object": "block", "type": "callout",
-                "callout": {
-                    "rich_text": [{"type": "text", "text": {"content": clean or "Рекомендация"}}],
-                    "icon": {"emoji": "🧠"},
-                    "color": "blue_background"
-                }
-            })
+            blocks.append({"object": "block", "type": "callout", "callout": {"rich_text": [{"type": "text", "text": {"content": clean or "Рекомендация"}}], "icon": {"emoji": "🧠"}, "color": "blue_background"}})
         elif line.startswith('- ') or line.startswith('• '):
-            blocks.append({
-                "object": "block", "type": "bulleted_list_item",
-                "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": line[2:]}}]}
-            })
+            blocks.append({"object": "block", "type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [{"type": "text", "text": {"content": line[2:]}}]}})
         else:
-            blocks.append({
-                "object": "block", "type": "paragraph",
-                "paragraph": {"rich_text": [{"type": "text", "text": {"content": line}}]}
-            })
+            blocks.append({"object": "block", "type": "paragraph", "paragraph": {"rich_text": [{"type": "text", "text": {"content": line}}]}})
     
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "https://api.notion.com/v1/pages",
-                headers={
-                    "Authorization": f"Bearer {NOTION_KEY}",
-                    "Content-Type": "application/json",
-                    "Notion-Version": "2022-06-28"
-                },
+                headers={"Authorization": f"Bearer {NOTION_KEY}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"},
                 json={
                     "parent": {"database_id": NOTION_DB},
                     "properties": {
@@ -470,7 +396,6 @@ async def save_to_notion(title: str, content: str) -> str:
                     "children": blocks
                 }
             )
-            
             if response.status_code == 200:
                 return response.json().get("url")
     except Exception as e:
@@ -503,7 +428,7 @@ async def url_handler(client, message: Message):
     
     try:
         file_path = await download_from_url(text)
-        await _audio(message, status, file_path, force_full=True)
+        await process_audio(message, status, file_path, force_full=True)
     except Exception as e:
         await status.edit_text(f"❌ {e}")
 
@@ -535,9 +460,7 @@ async def process_audio(message: Message, status: Message, file_path: str, is_vo
             return
         
         transcript_len = len(transcript)
-        print(f"📊 Transcript: {transcript_len} chars | Voice: {is_voice} | Force full: {force_full}")
         
-        # Логика выбора режима
         is_short = False
         if is_voice:
             is_short = True
@@ -547,8 +470,6 @@ async def process_audio(message: Message, status: Message, file_path: str, is_vo
             is_short = False
         else:
             is_short = True
-        
-        print(f"📊 Mode: {'SIMPLE' if is_short else 'FULL'}")
         
         if is_short:
             await status.edit_text("📝 Готовлю саммари...")
@@ -561,14 +482,12 @@ async def process_audio(message: Message, status: Message, file_path: str, is_vo
             await status.edit_text("🧠 Анализирую встречу...")
             analysis = analyze_meeting(transcript)
             
-            # Генерируем название темы
             await status.edit_text("📄 Создаю PDF...")
             topic = generate_topic(transcript)
             date_str = datetime.now().strftime('%d.%m.%Y')
             
-            # Безопасное имя файла
-            safe_topic = "".join(c for c in topic if c.isalnum() or c in (' ', '-', '_')).strip()
-            safe_topic = safe_topic[:50]  # Ограничиваем длину
+            safe_topic = "".join(c for c in topic if c.isalnum() or c in (' ', '-', '_', 'а', 'б', 'в', 'г', 'д', 'е', 'ё', 'ж', 'з', 'и', 'й', 'к', 'л', 'м', 'н', 'о', 'п', 'р', 'с', 'т', 'у', 'ф', 'х', 'ц', 'ч', 'ш', 'щ', 'ъ', 'ы', 'ь', 'э', 'ю', 'я', 'А', 'Б', 'В', 'Г', 'Д', 'Е', 'Ё', 'Ж', 'З', 'И', 'Й', 'К', 'Л', 'М', 'Н', 'О', 'П', 'Р', 'С', 'Т', 'У', 'Ф', 'Х', 'Ц', 'Ч', 'Ш', 'Щ', 'Ъ', 'Ы', 'Ь', 'Э', 'Ю', 'Я')).strip()
+            safe_topic = safe_topic[:50]
             filename = f"{safe_topic}_{date_str}.pdf"
             
             pdf_path = f"/tmp/{filename}"
@@ -592,10 +511,14 @@ async def process_audio(message: Message, status: Message, file_path: str, is_vo
             os.unlink(file_path)
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         await status.edit_text(f"❌ {e}")
         if os.path.exists(file_path):
             os.unlink(file_path)
 
+
 print("🧠 Цифровой Умник запущен!")
 app.run()
+```
+
+**Commit changes**
