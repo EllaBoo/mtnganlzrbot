@@ -613,11 +613,12 @@ async def language_callback(client: Client, callback: CallbackQuery):
             parse_mode="Markdown"
         )
         
-    except json.JSONDecodeError:
+   except json.JSONDecodeError as e:
+        print(f"JSON Error: {e}")
         await callback.message.edit_text("❌ Ошибка анализа. Попробуй ещё раз.")
     except Exception as e:
-        print(f"Error: {e}")
-        await callback.message.edit_text(f"❌ Ошибка: {str(e)[:100]}")
+        print(f"Error: {type(e).__name__}: {e}")
+        await callback.message.edit_text(f"❌ Ошибка: {type(e).__name__}")
     finally:
         if file_path and os.path.exists(file_path):
             os.unlink(file_path)
