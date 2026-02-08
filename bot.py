@@ -535,6 +535,7 @@ async def media_handler(client: Client, message: Message):
 
 
 @app.on_callback_query(filters.regex(r"^lang_"))
+@app.on_callback_query(filters.regex(r"^lang_"))
 async def language_callback(client: Client, callback: CallbackQuery):
     """Обработка выбора языка"""
     
@@ -599,30 +600,6 @@ async def language_callback(client: Client, callback: CallbackQuery):
         # Анализируем
         await callback.message.edit_text(
             f"✅ Язык: {LANGUAGES[lang_code]}\n\n🧠 Анализирую содержание..."
-        )
-        analysis = await analyze_meeting(transcript, lang_code)
-        
-        # Сохраняем результат
-        user_data[user_id]["analysis"] = analysis
-        user_data[user_id]["transcript"] = transcript
-        
-        # Отправляем результат
-        await callback.message.edit_text(
-            format_summary(analysis),
-            reply_markup=get_topics_keyboard(analysis, user_id),
-            parse_mode="Markdown"
-        )
-        
-   except json.JSONDecodeError as e:
-        print(f"JSON Error: {e}")
-        await callback.message.edit_text("❌ Ошибка анализа. Попробуй ещё раз.")
-    except Exception as e:
-        print(f"Error: {type(e).__name__}: {e}")
-        await callback.message.edit_text(f"❌ Ошибка: {type(e).__name__}")
-    finally:
-        if file_path and os.path.exists(file_path):
-            os.unlink(file_path)
-
 
 @app.on_callback_query(filters.regex(r"^topic_"))
 async def topic_callback(client: Client, callback: CallbackQuery):
