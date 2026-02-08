@@ -765,8 +765,13 @@ async def callback(client, cb):
     data = cb.data
     cache = get_cache(uid)
     
+    async def safe_edit(text, reply_markup=None):
+        try:
+            await cb.message.edit_text(text, reply_markup=reply_markup)
+        except Exception:
+            pass
+    
     try:
-        # Language selection
         if data.startswith("lang_"):
             lang = data.replace("lang_", "")
             if lang == "auto":
@@ -775,21 +780,21 @@ async def callback(client, cb):
             cache['transcribe_lang'] = lang
             
             if 'file_msg' not in cache:
-                await cb.answer("❌ Please send a file first!", show_alert=True)
+                await cb.answer("❌ Send file first!", show_alert=True)
                 return
             
             msg = cache['file_msg']
             await cb.answer("⏳")
-            status = await cb.message.edit_text(t(uid, 'downloading'))
+            await safe_edit(t(uid, 'downloading'))
             
             try:
                 with tempfile.TemporaryDirectory() as tmp:
                     path = await msg.download(file_name=f"{tmp}/media")
-                    await status.edit_text(t(uid, 'transcribing'))
+                    await safe_edit(t(uid, 'transcribing'))
                     
                     result, err = transcribe_file(path, lang)
                     if err:
-                        await status.edit_text(f"{t(uid, 'error')}: {err}")
+                        await safe_edit(f"{t(uid, 'error')}: {err}")
                         return
                     
                     cache["transcript"] = result["transcript"]
@@ -797,18 +802,148 @@ async def callback(client, cb):
                     cache["speakers"] = result["speakers"]
                     
                     mins = int(result['duration'] // 60)
-                    await status.edit_text(f"✅ Transcribed!\n👥 {result['speakers']} speakers\n🕐 {mins} min\n\n{t(uid, 'analyzing')}")
+                    await safe_edit(f"✅ Transcribed!\n👥 {result['speakers']} speakers\n🕐 {mins} min\n\n{t(uid, 'analyzing')}")
                     
                     summary = analyze(result["transcript"], result["duration"], result["speakers"], lang)
                     cache["summary"] = summary
                     
-                    await status.delete()
+                    try:
+                        await cb.message.delete()
+                    except:
+                        pass
+                    
                     preview = summary[:3500] + "\n\n_...see full in file_" if len(summary) > 3500 else summary
                     await msg.reply(f"📋 **Analysis:**\n\n{preview}")
                     await msg.reply(t(uid, 'choose_action'), reply_markup=main_kb(uid))
                     
             except Exception as e:
-                await status.edit_text(f"{t(uid, 'error')}: {e}")
+                await safe_edit(f"{t(uid, 'error')}: {e}")
+            return
+        
+        if data.startswith("html_"):
+            parts = data.split("_")
+            theme = parts[1]
+            is_custom = len(parts) > 2 and parts[2] == "c"
+            key = "custom_result" if is_custom else "summary"
+            
+            if key not in cache:
+                await cb.answer("❌ No data!", show_alert=True)
+                return
+            
+            await cb.answer("⏳")
+            lang = cache.get('output_lang', 'ru')
+            path = save_html(cache[key], theme, lang)
+            await cb.message.reply_document(path, caption=f"📄 HTML ({theme}) | 💡 Click sections to expand!")
+            os.remove(path)
+            await cb.message.reply(t(uid, 'choose_action'), reply_markup=main_kb(uid))
+        
+        elif data == "txt":
+            if "summary" not in cache:
+                await cb.answer("❌ No data!", show_alert=True)
+                return
+            await cb.answer("⏳")
+            path = save_txt(cache["summary"])
+            await cb.message.reply_document(path, caption="📄 TXT")
+            os.remove(path)
+            await cb.message.reply(t(uid, 'choose_action'), reply_markup=main_kb(uid))
+        
+        elif data == "deep_dive":
+            if "transcript" not in cache:
+                await cb.answer("❌ No data!", show_alert=True)
+                return
+            await cb.answer()
+            await safe_edit("🔍 **Choose topic:**", reply_markup=topics_kb(uid))
+        
+        elif data.startswith("topic_"):
+            if "transcript" not in cache:
+                await cb.answer("❌ No data!", show_alert=True)
+                return
+            
+            topic = data.replace("topic_", "")
+            lang = cache.get('output_lang', 'ru')
+            
+            prompts = {
+                'decisions': {'ru': 'Перечисли ВСЕ принятые решения подробно', 'en': 'List ALL decisions made in detail'},
+                'tasks': {'ru': 'Перечисли ВСЕ задачи с ответственными', 'en': 'List ALL tasks with assignees'},
+                'speakers': {'ru': 'Опиши позицию КАЖДОГО спикера с цитатами', 'en': 'Describe EACH speaker position with quotes'},
+                'quotes': {'ru': 'Выпиши ВСЕ ключевые цитаты', 'en': 'List ALL key quotes'},
+                'open': {'ru': 'Перечисли ВСЕ открытые вопросы', 'en': 'List ALL open questions'},
+                'recommendations': {'ru': 'Дай подробные экспертные рекомендации и план действий', 'en': 'Give detailed expert recommendations and action plan'}
+            }
+            
+            prompt = prompts.get(topic, {}).get(lang, prompts.get(topic, {}).get('en', ''))
+            
+            await cb.answer("🧠")
+            await safe_edit("🧠 Analyzing...")
+            
+            result = custom_analyze(cache["transcript"], prompt, lang)
+            cache["custom_result"] = result
+            
+            await cb.message.reply(f"📋 **Result:**\n\n{result[:4000]}")
+            if len(result) > 4000:
+                await cb.message.reply(result[4000:8000])
+            await cb.message.reply(t(uid, 'choose_action'), reply_markup=continue_kb(uid))
+        
+        elif data == "custom":
+            cache["stage"] = "waiting_criteria"
+            await cb.answer()
+            await safe_edit(t(uid, 'enter_question'))
+        
+        elif data == "transcript":
+            if "transcript" not in cache:
+                await cb.answer("❌ No data!", show_alert=True)
+                return
+            await cb.answer()
+            tr = cache["transcript"]
+            await cb.message.reply("📜 **Transcript:**")
+            for i in range(0, len(tr), 4000):
+                await cb.message.reply(tr[i:i+4000])
+            await cb.message.reply(t(uid, 'choose_action'), reply_markup=main_kb(uid))
+        
+        elif data == "regenerate":
+            if "transcript" not in cache:
+                await cb.answer("❌ No data!", show_alert=True)
+                return
+            await cb.answer("🔄")
+            await safe_edit("🧠 Re-analyzing...")
+            
+            lang = cache.get('output_lang', 'ru')
+            summary = analyze(cache["transcript"], cache.get("duration", 0), cache.get("speakers", 1), lang)
+            cache["summary"] = summary
+            
+            preview = summary[:3500] + "..." if len(summary) > 3500 else summary
+            await cb.message.reply(f"📋 **New analysis:**\n\n{preview}")
+            await cb.message.reply(t(uid, 'choose_action'), reply_markup=main_kb(uid))
+        
+        elif data == "back_main":
+            await cb.answer()
+            await safe_edit(t(uid, 'choose_action'), reply_markup=main_kb(uid))
+        
+        elif data == "help":
+            await cb.answer()
+            await safe_edit("""💡 **How it works:**
+
+1️⃣ Send audio/video file
+2️⃣ Choose language
+3️⃣ Wait for transcription
+4️⃣ Get AI analysis
+5️⃣ Download HTML/TXT
+6️⃣ Ask follow-up questions!
+
+📄 HTML has expandable sections!""", reply_markup=help_kb(uid))
+        
+        elif data == "formats":
+            await cb.answer()
+            await safe_edit("""🎤 **Supported formats:**
+
+🎵 MP3, WAV, OGG, M4A, FLAC
+🎬 MP4, MOV, AVI, MKV, WEBM
+🎙 Telegram voice messages
+
+📦 Up to 2GB (Premium 4GB)""", reply_markup=help_kb(uid))
+    
+    except Exception as e:
+        await cb.message.reply(f"❌ Error: {e}")
             return
         
         # HTML export
