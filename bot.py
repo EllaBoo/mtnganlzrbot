@@ -534,8 +534,6 @@ async def media_handler(client: Client, message: Message):
     )
 
 
-
-@app.on_callback_query(filters.regex(r"^lang_"))
 @app.on_callback_query(filters.regex(r"^lang_"))
 async def language_callback(client: Client, callback: CallbackQuery):
     """Обработка выбора языка"""
