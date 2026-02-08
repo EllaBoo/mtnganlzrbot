@@ -1,6 +1,5 @@
 import os
 import uuid
-import random
 import tempfile
 import re
 import requests as http_requests
@@ -26,9 +25,9 @@ def get_user_cache(user_id):
 
 def generate_html(content, theme="light"):
     if theme == "dark":
-        css = "body{font-family:'Segoe UI',sans-serif;font-size:14px;line-height:1.7;color:#e4e4e7;background:#18181b;padding:40px;max-width:900px;margin:0 auto}h1{font-size:26px;color:#fafafa;border-bottom:3px solid #3b82f6;padding-bottom:12px}h2{font-size:20px;color:#fafafa;background:linear-gradient(135deg,#1e3a5f,#1e293b);padding:12px 16px;border-left:4px solid #3b82f6;border-radius:0 8px 8px 0;margin-top:28px}h3{font-size:16px;color:#93c5fd;border-left:3px solid #60a5fa;padding-left:12px}strong{color:#fafafa}ul,ol{padding-left:24px}li{margin-bottom:8px}blockquote{background:#1e293b;border-left:4px solid #8b5cf6;padding:12px 16px;margin:16px 0;color:#c4b5fd;border-radius:0 8px 8px 0}hr{border:none;height:2px;background:linear-gradient(90deg,transparent,#3b82f6,transparent);margin:24px 0}table{width:100%;border-collapse:collapse;background:#1e293b;border-radius:8px;overflow:hidden}th{background:#3b82f6;color:white;padding:10px 14px;text-align:left}td{padding:10px 14px;border-bottom:1px solid #334155}.meta{color:#71717a;font-size:12px;margin-bottom:20px}"
+        css = "body{font-family:'Segoe UI',sans-serif;font-size:14px;line-height:1.7;color:#e4e4e7;background:#18181b;padding:40px;max-width:900px;margin:0 auto}h1{font-size:26px;color:#fafafa;border-bottom:3px solid #3b82f6;padding-bottom:12px}h2{font-size:20px;color:#fafafa;background:linear-gradient(135deg,#1e3a5f,#1e293b);padding:12px 16px;border-left:4px solid #3b82f6;border-radius:0 8px 8px 0;margin-top:28px}h3{font-size:16px;color:#93c5fd;border-left:3px solid #60a5fa;padding-left:12px}strong{color:#fafafa}ul,ol{padding-left:24px}li{margin-bottom:8px}blockquote{background:#1e293b;border-left:4px solid #8b5cf6;padding:12px 16px;margin:16px 0;color:#c4b5fd;border-radius:0 8px 8px 0}hr{border:none;height:2px;background:linear-gradient(90deg,transparent,#3b82f6,transparent);margin:24px 0}.meta{color:#71717a;font-size:12px;margin-bottom:20px}"
     else:
-        css = "body{font-family:'Segoe UI',sans-serif;font-size:14px;line-height:1.7;color:#1f2937;background:#fff;padding:40px;max-width:900px;margin:0 auto}h1{font-size:26px;color:#111827;border-bottom:3px solid #3b82f6;padding-bottom:12px}h2{font-size:20px;color:#111827;background:linear-gradient(135deg,#eff6ff,#dbeafe);padding:12px 16px;border-left:4px solid #3b82f6;border-radius:0 8px 8px 0;margin-top:28px}h3{font-size:16px;color:#1d4ed8;border-left:3px solid #60a5fa;padding-left:12px}strong{color:#111827}ul,ol{padding-left:24px}li{margin-bottom:8px}blockquote{background:#faf5ff;border-left:4px solid #8b5cf6;padding:12px 16px;margin:16px 0;color:#6b21a8;border-radius:0 8px 8px 0}hr{border:none;height:2px;background:linear-gradient(90deg,transparent,#3b82f6,transparent);margin:24px 0}table{width:100%;border-collapse:collapse;box-shadow:0 1px 3px rgba(0,0,0,0.1);border-radius:8px;overflow:hidden}th{background:#3b82f6;color:white;padding:10px 14px;text-align:left}td{padding:10px 14px;border-bottom:1px solid #e5e7eb}tr:hover{background:#f9fafb}.meta{color:#6b7280;font-size:12px;margin-bottom:20px}"
+        css = "body{font-family:'Segoe UI',sans-serif;font-size:14px;line-height:1.7;color:#1f2937;background:#fff;padding:40px;max-width:900px;margin:0 auto}h1{font-size:26px;color:#111827;border-bottom:3px solid #3b82f6;padding-bottom:12px}h2{font-size:20px;color:#111827;background:linear-gradient(135deg,#eff6ff,#dbeafe);padding:12px 16px;border-left:4px solid #3b82f6;border-radius:0 8px 8px 0;margin-top:28px}h3{font-size:16px;color:#1d4ed8;border-left:3px solid #60a5fa;padding-left:12px}strong{color:#111827}ul,ol{padding-left:24px}li{margin-bottom:8px}blockquote{background:#faf5ff;border-left:4px solid #8b5cf6;padding:12px 16px;margin:16px 0;color:#6b21a8;border-radius:0 8px 8px 0}hr{border:none;height:2px;background:linear-gradient(90deg,transparent,#3b82f6,transparent);margin:24px 0}.meta{color:#6b7280;font-size:12px;margin-bottom:20px}"
     
     html = content
     html = re.sub(r'^### (.+)$', r'<h3>\1</h3>', html, flags=re.MULTILINE)
@@ -51,9 +50,9 @@ def generate_html(content, theme="light"):
     html = html.replace('<p></p>', '')
     
     date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
-    theme_label = "Dark" if theme == "dark" else "Light"
+    theme_label = "Темная тема" if theme == "dark" else "Светлая тема"
     
-    return f'<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Meeting Summary</title><style>{css}</style></head><body><div class="meta">Date: {date_str} | Theme: {theme_label}</div>{html}</body></html>'
+    return f'<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Резюме встречи</title><style>{css}</style></head><body><div class="meta">{date_str} | {theme_label}</div>{html}</body></html>'
 
 def save_html(content, theme):
     html = generate_html(content, theme)
@@ -70,14 +69,27 @@ def save_txt(content):
 
 def transcribe_file(file_path):
     try:
-        headers = {"Authorization": f"Token {DEEPGRAM_KEY}"}
+        dg_key = DEEPGRAM_KEY.strip() if DEEPGRAM_KEY else None
+        if not dg_key:
+            return None, "DEEPGRAM_KEY не установлен!"
+        
+        headers = {"Authorization": f"Token {dg_key}"}
         params = f"model=nova-2&language={LANGUAGE}&diarize=true&smart_format=true&utterances=true&punctuate=true"
         
         with open(file_path, "rb") as f:
-            resp = http_requests.post(f"https://api.deepgram.com/v1/listen?{params}", headers=headers, data=f, timeout=1800)
+            file_data = f.read()
         
+        resp = http_requests.post(
+            f"https://api.deepgram.com/v1/listen?{params}",
+            headers=headers,
+            data=file_data,
+            timeout=1800
+        )
+        
+        if resp.status_code == 401:
+            return None, "Неверный Deepgram ключ!"
         if resp.status_code != 200:
-            return None, f"Deepgram error: {resp.status_code}"
+            return None, f"Deepgram ошибка: {resp.status_code}"
         
         result = resp.json()
         parts = []
@@ -85,7 +97,7 @@ def transcribe_file(file_path):
         
         if "results" in result and "utterances" in result["results"]:
             for u in result["results"]["utterances"]:
-                spk = f"Speaker {u.get('speaker', '?')}"
+                spk = f"Спикер {u.get('speaker', '?')}"
                 speakers.add(u.get('speaker', 0))
                 parts.append(f"**{spk}:** {u.get('transcript', '')}")
         
@@ -95,91 +107,90 @@ def transcribe_file(file_path):
                 parts = [ch[0]["alternatives"][0].get("transcript", "")]
         
         if not parts:
-            return None, "Empty transcript"
+            return None, "Не удалось распознать речь"
         
         return {"transcript": "\n\n".join(parts), "duration": result.get("metadata", {}).get("duration", 0), "speakers": len(speakers) or 1}, None
     except Exception as e:
         return None, str(e)
 
-PROMPT = """You are a meeting analyst. Create a detailed summary in Russian:
+PROMPT = """Ты — профессиональный аналитик встреч. Создай детальное структурированное резюме на русском языке:
 
-# Meeting Summary
+# Резюме встречи
 
-## Key Topics
-For each: title, essence, quotes, outcome.
+## Ключевые темы
+Для каждой темы: название, суть, цитаты, итог.
 
-## Participant Positions  
-For each speaker: points, quotes.
+## Позиции участников
+Для каждого спикера: тезисы и цитаты.
 
-## Decisions Made
-List with context.
+## Принятые решения
+Список решений с контекстом.
 
-## Tasks
-List with responsible persons.
+## Задачи
+Список с ответственными.
 
-## Open Questions
-What was not resolved.
+## Открытые вопросы
+Что не решено.
 
-## Conclusions
-Top-5 conclusions.
+## Выводы
+Топ-5 выводов.
 
-Be specific, provide quotes."""
+Приводи цитаты из транскрипта."""
 
 def analyze(transcript, duration, speakers):
     try:
         client = OpenAI(api_key=OPENAI_KEY)
-        text = transcript[:45000]
         resp = client.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role": "system", "content": PROMPT}, {"role": "user", "content": f"Transcript:\n\n{text}"}],
+            messages=[{"role": "system", "content": PROMPT}, {"role": "user", "content": f"Транскрипт:\n\n{transcript[:45000]}"}],
             temperature=0.3, max_tokens=6000
         )
         result = resp.choices[0].message.content
         mins, secs = int(duration // 60), int(duration % 60)
-        return f"{result}\n\n---\n**Stats:** {mins} min {secs} sec | {speakers} speaker(s) | {len(transcript.split())} words"
+        return f"{result}\n\n---\n**Статистика:** {mins} мин {secs} сек | {speakers} спикер(ов) | {len(transcript.split())} слов"
     except Exception as e:
-        return f"Analysis error: {e}"
+        return f"Ошибка: {e}"
 
 def custom_analyze(transcript, criteria):
     try:
         client = OpenAI(api_key=OPENAI_KEY)
         resp = client.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role": "system", "content": f"Extract from transcript by criteria:\n{criteria}\nProvide quotes."}, {"role": "user", "content": transcript[:45000]}],
+            messages=[{"role": "system", "content": f"Извлеки из транскрипта по критериям:\n{criteria}\nПриводи цитаты."}, {"role": "user", "content": transcript[:45000]}],
             temperature=0.3, max_tokens=4000
         )
         return resp.choices[0].message.content
     except Exception as e:
-        return f"Error: {e}"
+        return f"Ошибка: {e}"
 
 def main_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("HTML Light", callback_data="html_light"), InlineKeyboardButton("HTML Dark", callback_data="html_dark")],
-        [InlineKeyboardButton("TXT", callback_data="txt")],
-        [InlineKeyboardButton("Custom Query", callback_data="custom")],
-        [InlineKeyboardButton("Transcript", callback_data="transcript")],
-        [InlineKeyboardButton("Regenerate", callback_data="regenerate")]
+        [InlineKeyboardButton("\U0001F310 HTML светлая", callback_data="html_light"), InlineKeyboardButton("\U0001F311 HTML тёмная", callback_data="html_dark")],
+        [InlineKeyboardButton("\U0001F4C4 TXT файл", callback_data="txt")],
+        [InlineKeyboardButton("\U0000270F\U0000FE0F Свой вопрос", callback_data="custom")],
+        [InlineKeyboardButton("\U0001F4DC Транскрипт", callback_data="transcript")],
+        [InlineKeyboardButton("\U0001F504 Перегенерировать", callback_data="regenerate")]
     ])
 
 def help_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("How it works?", callback_data="help")],
-        [InlineKeyboardButton("File formats", callback_data="formats")],
-        [InlineKeyboardButton("Features", callback_data="features")]
+        [InlineKeyboardButton("\U0001F4A1 Как работает?", callback_data="help")],
+        [InlineKeyboardButton("\U0001F3A4 Форматы файлов", callback_data="formats")],
+        [InlineKeyboardButton("\U00002728 Возможности", callback_data="features")]
     ])
 
 def continue_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("HTML", callback_data="html_light_c"), InlineKeyboardButton("HTML Dark", callback_data="html_dark_c")],
-        [InlineKeyboardButton("Another question", callback_data="custom")],
-        [InlineKeyboardButton("Done", callback_data="done")]
+        [InlineKeyboardButton("\U0001F310 HTML", callback_data="html_light_c"), InlineKeyboardButton("\U0001F311 HTML тёмная", callback_data="html_dark_c")],
+        [InlineKeyboardButton("\U0000270F\U0000FE0F Ещё вопрос", callback_data="custom")],
+        [InlineKeyboardButton("\U00002705 Готово", callback_data="done")]
     ])
 
 app = Client("meeting_bot", api_id=int(API_ID) if API_ID else 0, api_hash=API_HASH or "", bot_token=BOT_TOKEN or "")
 
 @app.on_message(filters.command("start"))
 async def start_cmd(client, msg):
-    await msg.reply("Meeting Analyzer\n\nSend audio/video to get:\n- Summary\n- Participant positions\n- Decisions\n- Tasks\n\nWaiting for file!", reply_markup=help_kb())
+    await msg.reply("\U0001F44B **Meeting Analyzer**\n\nОтправь аудио/видео встречи и получи:\n\n\U0001F4DD Резюме\n\U0001F465 Позиции участников\n\U00002705 Решения\n\U0001F4CC Задачи\n\n\U0001F3A4 **Жду файл!**", reply_markup=help_kb())
 
 @app.on_message(filters.audio | filters.video | filters.voice | filters.video_note | filters.document)
 async def media_handler(client, msg):
@@ -190,33 +201,33 @@ async def media_handler(client, msg):
     
     uid = msg.from_user.id
     cache = get_user_cache(uid)
-    status = await msg.reply("Downloading...")
+    status = await msg.reply("\U0000231B Скачиваю файл...")
     
     try:
         with tempfile.TemporaryDirectory() as tmp:
             path = await msg.download(file_name=f"{tmp}/media")
-            await status.edit_text("Transcribing...")
+            await status.edit_text("\U0001F3A4 Транскрибирую...")
             
             result, err = transcribe_file(path)
             if err:
-                await status.edit_text(f"Error: {err}")
+                await status.edit_text(f"\U0000274C Ошибка: {err}")
                 return
             
             cache["transcript"] = result["transcript"]
             cache["duration"] = result["duration"]
             cache["speakers"] = result["speakers"]
             
-            await status.edit_text(f"Done! Speakers: {result['speakers']}\n\nAnalyzing...")
+            await status.edit_text(f"\U00002705 Распознано! Спикеров: {result['speakers']}\n\n\U0001F9E0 Анализирую...")
             
             summary = analyze(result["transcript"], result["duration"], result["speakers"])
             cache["summary"] = summary
             
             await status.delete()
             preview = summary[:3500] + "..." if len(summary) > 3500 else summary
-            await msg.reply(f"Analysis:\n\n{preview}")
-            await msg.reply("Choose format:", reply_markup=main_kb())
+            await msg.reply(f"\U0001F4CB **Анализ встречи:**\n\n{preview}")
+            await msg.reply("\U00002728 **Выбери формат:**", reply_markup=main_kb())
     except Exception as e:
-        await status.edit_text(f"Error: {e}")
+        await status.edit_text(f"\U0000274C Ошибка: {e}")
 
 @app.on_callback_query()
 async def callback(client, cb):
@@ -232,70 +243,71 @@ async def callback(client, cb):
             key = "custom_result" if is_custom else "summary"
             
             if key not in cache:
-                await cb.answer("Send file first!", show_alert=True)
+                await cb.answer("\U0000274C Сначала отправь файл!", show_alert=True)
                 return
             
-            await cb.answer("Generating...")
+            await cb.answer("\U0000231B Генерирую...")
             path = save_html(cache[key], theme)
-            await cb.message.reply_document(path, caption=f"HTML ({theme})")
+            theme_name = "тёмная" if theme == "dark" else "светлая"
+            await cb.message.reply_document(path, caption=f"\U0001F310 HTML ({theme_name} тема)")
             os.remove(path)
-            await cb.message.reply("More?", reply_markup=main_kb())
+            await cb.message.reply("\U00002728 Ещё что-нибудь?", reply_markup=main_kb())
         
         elif data == "txt":
             if "summary" not in cache:
-                await cb.answer("Send file first!", show_alert=True)
+                await cb.answer("\U0000274C Сначала отправь файл!", show_alert=True)
                 return
-            await cb.answer("...")
+            await cb.answer("\U0000231B")
             path = save_txt(cache["summary"])
-            await cb.message.reply_document(path, caption="TXT")
+            await cb.message.reply_document(path, caption="\U0001F4C4 TXT файл")
             os.remove(path)
-            await cb.message.reply("More?", reply_markup=main_kb())
+            await cb.message.reply("\U00002728 Ещё?", reply_markup=main_kb())
         
         elif data == "custom":
             cache["stage"] = "waiting_criteria"
             await cb.answer()
-            await cb.message.edit_text("Enter your question:\n\nExamples:\n- What budgets?\n- What did X say about Y?\n- List of risks")
+            await cb.message.edit_text("\U0000270F\U0000FE0F **Введи свой вопрос:**\n\nПримеры:\n\U00002022 Какие бюджеты обсуждались?\n\U00002022 Что сказал X про Y?\n\U00002022 Список рисков")
         
         elif data == "transcript":
             if "transcript" not in cache:
-                await cb.answer("No data!", show_alert=True)
+                await cb.answer("\U0000274C Нет данных!", show_alert=True)
                 return
             await cb.answer()
             t = cache["transcript"]
             for i in range(0, len(t), 4000):
                 await cb.message.reply(t[i:i+4000])
-            await cb.message.reply("More?", reply_markup=main_kb())
+            await cb.message.reply("\U00002728 Ещё?", reply_markup=main_kb())
         
         elif data == "regenerate":
             if "transcript" not in cache:
-                await cb.answer("No data!", show_alert=True)
+                await cb.answer("\U0000274C Нет данных!", show_alert=True)
                 return
-            await cb.answer("Regenerating...")
-            await cb.message.edit_text("Analyzing again...")
+            await cb.answer("\U0001F504")
+            await cb.message.edit_text("\U0001F9E0 Анализирую заново...")
             summary = analyze(cache["transcript"], cache.get("duration", 0), cache.get("speakers", 1))
             cache["summary"] = summary
             preview = summary[:3500] + "..." if len(summary) > 3500 else summary
-            await cb.message.reply(f"New analysis:\n\n{preview}")
-            await cb.message.reply("Format:", reply_markup=main_kb())
+            await cb.message.reply(f"\U0001F4CB **Новый анализ:**\n\n{preview}")
+            await cb.message.reply("\U00002728 Формат:", reply_markup=main_kb())
         
         elif data == "done":
-            await cb.answer("Done!")
-            await cb.message.edit_text("Done!\n\nSend new file!")
+            await cb.answer("\U00002705")
+            await cb.message.edit_text("\U00002705 Готово!\n\n\U0001F3A4 Отправь новый файл!")
         
         elif data == "help":
             await cb.answer()
-            await cb.message.edit_text("How it works:\n\n1. Send audio/video\n2. Wait for transcription\n3. Get analysis\n4. Download HTML\n5. Ask custom questions!", reply_markup=help_kb())
+            await cb.message.edit_text("\U0001F4A1 **Как работает:**\n\n1\U0000FE0F\U000020E3 Отправь аудио/видео\n2\U0000FE0F\U000020E3 Жди транскрибацию\n3\U0000FE0F\U000020E3 Получи анализ\n4\U0000FE0F\U000020E3 Скачай HTML/TXT\n5\U0000FE0F\U000020E3 Задавай вопросы!", reply_markup=help_kb())
         
         elif data == "formats":
             await cb.answer()
-            await cb.message.edit_text("Formats:\n\nMP3, WAV, OGG, M4A\nMP4, MOV, AVI, MKV\nTelegram voice messages\n\nUp to 2GB (Premium 4GB)", reply_markup=help_kb())
+            await cb.message.edit_text("\U0001F3A4 **Форматы:**\n\n\U0001F3B5 MP3, WAV, OGG, M4A\n\U0001F3AC MP4, MOV, AVI, MKV\n\U0001F399 Голосовые Telegram\n\n\U0001F4E6 До 2GB (Premium 4GB)", reply_markup=help_kb())
         
         elif data == "features":
             await cb.answer()
-            await cb.message.edit_text("Features:\n\n- Meeting summary\n- Participant positions\n- Decisions\n- Tasks\n- Custom questions\n\nExport: HTML (2 themes), TXT", reply_markup=help_kb())
+            await cb.message.edit_text("\U00002728 **Возможности:**\n\n\U0001F4DD Резюме встречи\n\U0001F465 Позиции участников\n\U00002705 Решения\n\U0001F4CC Задачи\n\U00002753 Свои вопросы\n\n\U0001F4E5 Экспорт: HTML, TXT", reply_markup=help_kb())
     
     except Exception as e:
-        await cb.message.reply(f"Error: {e}")
+        await cb.message.reply(f"\U0000274C Ошибка: {e}")
 
 @app.on_message(filters.text & ~filters.command(["start"]))
 async def text_handler(client, msg):
@@ -303,18 +315,18 @@ async def text_handler(client, msg):
     cache = get_user_cache(uid)
     
     if cache.get("stage") == "waiting_criteria" and "transcript" in cache:
-        status = await msg.reply("Analyzing...")
+        status = await msg.reply("\U0001F9E0 Анализирую...")
         try:
             result = custom_analyze(cache["transcript"], msg.text)
             cache["custom_result"] = result
             cache["stage"] = None
             await status.delete()
-            await msg.reply(f"Result:\n\n{result}")
-            await msg.reply("Save?", reply_markup=continue_kb())
+            await msg.reply(f"\U0001F4CB **Результат:**\n\n{result}")
+            await msg.reply("\U00002728 Сохранить?", reply_markup=continue_kb())
         except Exception as e:
-            await status.edit_text(f"Error: {e}")
+            await status.edit_text(f"\U0000274C Ошибка: {e}")
     else:
-        await msg.reply("Send audio/video file to analyze!", reply_markup=help_kb())
+        await msg.reply("\U0001F3A4 Отправь аудио или видео для анализа!", reply_markup=help_kb())
 
 if __name__ == "__main__":
     print("Starting bot...")
