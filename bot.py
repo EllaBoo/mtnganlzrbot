@@ -216,17 +216,53 @@ async def analyze_meeting(transcript: str, output_language: str) -> dict:
             {"role": "user", "content": f"Транскрипт:\n\n{transcript}"}
         ],
         temperature=0.3,
-        max_tokens=8000
+        max_tokens=8000,
+        response_format={"type": "json_object"}
     )
     
-    content = response.choices[0].message.content.strip()
+    content = response.choices[0].message.content
     
-    # Убираем markdown если есть
+    # Логируем для отладки
+    print("=== GPT RESPONSE START ===")
+    print(content[:500])
+    print("=== GPT RESPONSE END ===")
+    
+    # Очистка
+    content = content.strip()
     content = re.sub(r'^```json\s*', '', content)
+    content = re.sub(r'^```\s*', '', content)
     content = re.sub(r'\s*```$', '', content)
+    content = content.strip()
     
-    return json.loads(content)
-
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as e:
+        print(f"JSON Error: {e}")
+        print(f"Content: {content[:200]}")
+        
+        # Пробуем найти JSON
+        match = re.search(r'\{[\s\S]*\}', content)
+        if match:
+            try:
+                return json.loads(match.group())
+            except:
+                pass
+        
+        # Возвращаем базовую структуру если всё сломалось
+        return {
+            "summary": "Не удалось проанализировать. Попробуй ещё раз.",
+            "topics": [],
+            "participants": [],
+            "overall_decisions": [],
+            "action_items": [],
+            "agreements": [],
+            "disagreements": [],
+            "risks": [],
+            "opportunities": [],
+            "expert_recommendations": ["Попробуй загрузить файл ещё раз"],
+            "next_steps": {"urgent": [], "medium": [], "long": []},
+            "meeting_effectiveness": {"score": 0, "comment": "Ошибка анализа"}
+        }
 
 def format_summary(analysis: dict) -> str:
     """Форматирует краткое саммари"""
