@@ -1,729 +1,523 @@
 import os
-import re
-import json
-import asyncio
+import uuid
 import tempfile
+import markdown
+import requests
 from datetime import datetime
-from typing import Optional
-import httpx
+from pathlib import Path
+
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from openai import OpenAI
+from weasyprint import HTML, CSS
 
-# ============= CONFIG =============
-API_ID = int(os.environ.get("TELEGRAM_API_ID", 0))
-API_HASH = os.environ.get("TELEGRAM_API_HASH", "")
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-DEEPGRAM_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
-OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+# === CONFIGURATION ===
+API_ID = os.environ.get('TELEGRAM_API_ID')
+API_HASH = os.environ.get('TELEGRAM_API_HASH')
+BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+DEEPGRAM_KEY = os.environ.get('DEEPGRAM_KEY')
+OPENAI_KEY = os.environ.get('OPENAI_KEY')
+LANGUAGE = os.environ.get('LANGUAGE', 'ru')
 
-app = Client("meeting_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-openai_client = OpenAI(api_key=OPENAI_KEY)
+# === USER CACHE ===
+user_cache = {}
 
-# Хранилище данных пользователей
-user_data = {}
+def get_user_cache(user_id: int) -> dict:
+    if user_id not in user_cache:
+        user_cache[user_id] = {}
+    return user_cache[user_id]
 
-# ============= LANGUAGES =============
-LANGUAGES = {
-    "ru": "🇷🇺 Русский",
-    "en": "🇬🇧 English",
-    "kk": "🇰🇿 Қазақша",
-    "original": "🌐 Язык оригинала"
+# === CSS STYLES ===
+def get_css_styles(theme: str = "light") -> str:
+    if theme == "dark":
+        return """
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 11pt; line-height: 1.6; color: #e4e4e7; background: #18181b; padding: 40px 50px;
 }
-
-# ============= PROMPTS =============
-ANALYSIS_PROMPT = """Ты — Цифровой Умник, senior бизнес-консультант и эксперт-аналитик с 20+ летним опытом.
-
-ЗАДАЧА: Проанализируй транскрипт встречи/выступления и верни результат в формате JSON.
-
-КРИТИЧЕСКИ ВАЖНО — НЕ ВЫДУМЫВАЙ:
-- НЕ придумывай имена участников — используй только те, что явно названы
-- НЕ придумывай конфликты или разные позиции, если их не было
-- НЕ придумывай данные, которых нет в транскрипте
-- Если все были согласны — так и напиши
-- Если информации нет — пропусти поле или напиши null
-
-ФОРМАТ ОТВЕТА — СТРОГО JSON:
-{
-    "summary": "Краткое резюме в 3-5 предложений",
-    
-    "topics": [
-        {
-            "id": 1,
-            "title": "Название темы",
-            "duration_percent": 25,
-            "key_points": ["пункт 1", "пункт 2"],
-            "quotes": [{"text": "цитата", "author": "кто сказал или null"}],
-            "decisions": ["решение 1"],
-            "open_questions": ["вопрос 1"],
-            "expert_comment": "Комментарий Цифрового Умника по этой теме"
-        }
-    ],
-    
-    "participants": ["имя 1", "имя 2"],
-    
-    "overall_decisions": ["Общее решение 1", "Общее решение 2"],
-    
-    "action_items": [
-        {"task": "задача", "responsible": "кто или null", "deadline": "срок или null"}
-    ],
-    
-    "agreements": ["С чем все согласились"],
-    
-    "disagreements": ["Разногласия — ТОЛЬКО если реально были, иначе пустой массив"],
-    
-    "risks": ["риск 1"],
-    
-    "opportunities": ["возможность 1"],
-    
-    "expert_recommendations": [
-        "Рекомендация 1 от Цифрового Умника",
-        "Рекомендация 2"
-    ],
-    
-    "next_steps": {
-        "urgent": ["срочные действия 1-7 дней"],
-        "medium": ["среднесрок 1-4 недели"],
-        "long": ["долгосрок 1-3 месяца"]
-    },
-    
-    "meeting_effectiveness": {
-        "score": 8,
-        "comment": "Комментарий об эффективности встречи"
-    }
+h1 { font-size: 24pt; font-weight: 700; color: #fafafa; margin-bottom: 8px; padding-bottom: 16px; border-bottom: 3px solid #3b82f6; }
+h2 { font-size: 16pt; font-weight: 600; color: #fafafa; margin-top: 32px; margin-bottom: 16px; padding: 12px 16px; background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%); border-left: 4px solid #3b82f6; border-radius: 0 8px 8px 0; }
+h3 { font-size: 13pt; font-weight: 600; color: #93c5fd; margin-top: 24px; margin-bottom: 12px; padding-left: 12px; border-left: 3px solid #60a5fa; }
+h4 { font-size: 11pt; font-weight: 600; color: #a5b4fc; margin-top: 16px; margin-bottom: 8px; }
+p { margin-bottom: 12px; text-align: justify; }
+strong { color: #fafafa; font-weight: 600; }
+ul, ol { margin: 12px 0; padding-left: 24px; }
+li { margin-bottom: 6px; }
+li::marker { color: #60a5fa; }
+blockquote { margin: 16px 0; padding: 16px 20px; background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border-left: 4px solid #8b5cf6; border-radius: 0 8px 8px 0; font-style: italic; color: #c4b5fd; }
+blockquote p { margin: 0; }
+table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 10pt; background: #1e293b; border-radius: 8px; overflow: hidden; }
+th { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; font-weight: 600; padding: 12px 16px; text-align: left; }
+td { padding: 10px 16px; border-bottom: 1px solid #334155; }
+tr:last-child td { border-bottom: none; }
+tr:hover { background: #334155; }
+hr { border: none; height: 2px; background: linear-gradient(90deg, transparent, #3b82f6, transparent); margin: 32px 0; }
+code { background: #1e293b; padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 10pt; color: #fbbf24; }
+@page { size: A4; margin: 20mm; }
+"""
+    else:
+        return """
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 11pt; line-height: 1.6; color: #1f2937; background: #ffffff; padding: 40px 50px;
 }
-
-ВАЖНО:
-1. Выдели ВСЕ темы, которые обсуждались — не пропускай ничего
-2. duration_percent — примерная доля времени на тему (в сумме 100%)
-3. Для каждой темы дай экспертный комментарий
-4. В конце дай общие рекомендации от Цифрового Умника
-5. Отвечай ТОЛЬКО валидным JSON, без markdown, без ```json```
-
-ЯЗЫК ОТВЕТА: {output_language}
+h1 { font-size: 24pt; font-weight: 700; color: #111827; margin-bottom: 8px; padding-bottom: 16px; border-bottom: 3px solid #3b82f6; }
+h2 { font-size: 16pt; font-weight: 600; color: #111827; margin-top: 32px; margin-bottom: 16px; padding: 12px 16px; background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-left: 4px solid #3b82f6; border-radius: 0 8px 8px 0; }
+h3 { font-size: 13pt; font-weight: 600; color: #1d4ed8; margin-top: 24px; margin-bottom: 12px; padding-left: 12px; border-left: 3px solid #60a5fa; }
+h4 { font-size: 11pt; font-weight: 600; color: #4f46e5; margin-top: 16px; margin-bottom: 8px; }
+p { margin-bottom: 12px; text-align: justify; }
+strong { color: #111827; font-weight: 600; }
+ul, ol { margin: 12px 0; padding-left: 24px; }
+li { margin-bottom: 6px; }
+li::marker { color: #3b82f6; }
+blockquote { margin: 16px 0; padding: 16px 20px; background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%); border-left: 4px solid #8b5cf6; border-radius: 0 8px 8px 0; font-style: italic; color: #6b21a8; }
+blockquote p { margin: 0; }
+table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 10pt; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+th { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; font-weight: 600; padding: 12px 16px; text-align: left; }
+td { padding: 10px 16px; border-bottom: 1px solid #e5e7eb; }
+tr:last-child td { border-bottom: none; }
+tr:hover { background: #f9fafb; }
+hr { border: none; height: 2px; background: linear-gradient(90deg, transparent, #3b82f6, transparent); margin: 32px 0; }
+code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 10pt; color: #dc2626; }
+@page { size: A4; margin: 20mm; }
 """
 
-# ============= HELPERS =============
+# === PDF/HTML GENERATION ===
+def generate_pdf(markdown_content: str, theme: str = "light", title: str = "Meeting Summary") -> str:
+    md = markdown.Markdown(extensions=['tables', 'fenced_code'])
+    html_content = md.convert(markdown_content)
+    date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+    theme_label = "Тёмная" if theme == "dark" else "Светлая"
+    meta_color = "#71717a" if theme == "dark" else "#6b7280"
+    
+    full_html = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>{title}</title>
+    <style>{get_css_styles(theme)}</style>
+</head>
+<body>
+    <div style="color: {meta_color}; font-size: 10pt; margin-bottom: 24px;">
+        📅 Сгенерировано: {date_str} | 🎨 Тема: {theme_label}
+    </div>
+    {html_content}
+</body>
+</html>"""
+    
+    pdf_path = f"/tmp/meeting_summary_{uuid.uuid4().hex[:8]}.pdf"
+    HTML(string=full_html).write_pdf(pdf_path)
+    return pdf_path
 
-async def download_youtube(url: str) -> Optional[str]:
-    """Скачивает аудио с YouTube"""
-    try:
-        import yt_dlp
-        
-        output_path = tempfile.mktemp(suffix=".mp3")
-        
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': output_path.replace('.mp3', ''),
-            'quiet': True,
-            'no_warnings': True
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        
-        # yt-dlp добавляет расширение
-        actual_path = output_path.replace('.mp3', '') + '.mp3'
-        if os.path.exists(actual_path):
-            return actual_path
-        return output_path
-        
-    except Exception as e:
-        print(f"YouTube download error: {e}")
-        return None
+def generate_html(markdown_content: str, theme: str = "light", title: str = "Meeting Summary") -> str:
+    md = markdown.Markdown(extensions=['tables', 'fenced_code'])
+    html_content = md.convert(markdown_content)
+    date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+    theme_label = "Тёмная" if theme == "dark" else "Светлая"
+    meta_color = "#71717a" if theme == "dark" else "#6b7280"
+    
+    full_html = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>
+        {get_css_styles(theme)}
+        .collapsible {{ cursor: pointer; user-select: none; }}
+        .collapsible:hover {{ opacity: 0.8; }}
+        .collapsible::after {{ content: ' ▼'; font-size: 8pt; opacity: 0.5; }}
+        .collapsible.collapsed::after {{ content: ' ▶'; }}
+        .content {{ max-height: 5000px; overflow: hidden; transition: max-height 0.3s ease; }}
+        .content.collapsed {{ max-height: 0; }}
+    </style>
+</head>
+<body>
+    <div style="color: {meta_color}; font-size: 10pt; margin-bottom: 24px;">
+        📅 Сгенерировано: {date_str} | 🎨 Тема: {theme_label}
+    </div>
+    {html_content}
+    <script>
+        document.querySelectorAll('h2, h3').forEach(heading => {{
+            heading.classList.add('collapsible');
+            heading.addEventListener('click', function() {{
+                this.classList.toggle('collapsed');
+                let content = this.nextElementSibling;
+                while(content && !content.matches('h2, h3')) {{
+                    content.classList.toggle('collapsed');
+                    content = content.nextElementSibling;
+                }}
+            }});
+        }});
+    </script>
+</body>
+</html>"""
+    
+    html_path = f"/tmp/meeting_summary_{uuid.uuid4().hex[:8]}.html"
+    with open(html_path, 'w', encoding='utf-8') as f:
+        f.write(full_html)
+    return html_path
 
+# === TRANSCRIPTION ===
+def transcribe_file(file_path: str) -> tuple:
+    headers = {"Authorization": f"Token {DEEPGRAM_KEY}"}
+    params = f"model=nova-2&language={LANGUAGE}&diarize=true&smart_format=true&utterances=true&punctuate=true"
+    url = f"https://api.deepgram.com/v1/listen?{params}"
+    
+    with open(file_path, "rb") as f:
+        resp = requests.post(url, headers=headers, data=f, timeout=1800)
+    
+    if resp.status_code != 200:
+        return None, f"Deepgram error: {resp.text}"
+    
+    result = resp.json()
+    transcript_parts = []
+    speakers_set = set()
+    
+    if "results" in result and "utterances" in result["results"]:
+        for utt in result["results"]["utterances"]:
+            speaker = f"Speaker {utt.get('speaker', '?')}"
+            speakers_set.add(utt.get('speaker', 0))
+            transcript_parts.append(f"**{speaker}:** {utt.get('transcript', '')}")
+    
+    if not transcript_parts and "results" in result:
+        channels = result["results"].get("channels", [])
+        if channels and channels[0].get("alternatives"):
+            transcript_parts = [channels[0]["alternatives"][0].get("transcript", "")]
+    
+    duration = result.get("metadata", {}).get("duration", 0)
+    return {
+        "transcript": "\n\n".join(transcript_parts),
+        "duration": duration,
+        "speakers": len(speakers_set) if speakers_set else 1
+    }, None
 
-async def download_from_url(url: str) -> Optional[str]:
-    """Скачивает файл по прямой ссылке"""
-    try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=300.0) as client:
-            response = await client.get(url)
-            
-            suffix = ".mp3"
-            if "video" in response.headers.get("content-type", ""):
-                suffix = ".mp4"
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(response.content)
-                return tmp.name
-                
-    except Exception as e:
-        print(f"URL download error: {e}")
-        return None
+# === GPT ANALYSIS ===
+ANALYSIS_PROMPT = """Ты — профессиональный аналитик деловых встреч. Создай ДЕТАЛЬНОЕ структурированное резюме.
 
+# Резюме встречи
 
-async def transcribe_audio(file_path: str) -> str:
-    """Транскрибирует аудио через Deepgram"""
-    
-    url = "https://api.deepgram.com/v1/listen"
-    params = {
-        "model": "nova-2",
-        "language": "ru",
-        "punctuate": "true",
-        "diarize": "true",
-        "paragraphs": "true"
-    }
-    
-    async with httpx.AsyncClient(timeout=600.0) as client:
-        with open(file_path, "rb") as f:
-            response = await client.post(
-                url,
-                params=params,
-                headers={
-                    "Authorization": f"Token {DEEPGRAM_KEY}",
-                    "Content-Type": "audio/mpeg"
-                },
-                content=f.read()
-            )
-    
-    result = response.json()
-    
-    # Пробуем получить текст с параграфами
-    try:
-        paragraphs = result["results"]["channels"][0]["alternatives"][0]["paragraphs"]["paragraphs"]
-        transcript_parts = []
-        for p in paragraphs:
-            for s in p["sentences"]:
-                transcript_parts.append(s["text"])
-        transcript = " ".join(transcript_parts)
-    except:
-        transcript = result["results"]["channels"][0]["alternatives"][0]["transcript"]
-    
-    return transcript
+---
 
+## Ключевые темы (с детализацией)
 
-async def analyze_meeting(transcript: str, output_language: str) -> dict:
-    """Анализирует транскрипт через OpenAI"""
+Для КАЖДОЙ темы создай подраздел:
+
+### Тема 1: [Название]
+**Суть:** [2-3 предложения]
+**Контекст:** [Почему поднялась тема]
+**Что обсуждалось:**
+- [Пункт 1]
+- [Пункт 2]
+**Ключевые цитаты:** 
+> "[Цитата]" — Speaker X
+**Итог по теме:** [Решение/открытый вопрос]
+
+---
+
+## Позиции участников
+
+### Speaker 0
+**Роль:** [Если понятно]
+**Основные тезисы:**
+- [Тезис 1]
+- [Тезис 2]
+**Характерные высказывания:**
+> "[Цитата]"
+
+---
+
+## Принятые решения
+
+| # | Решение | Контекст | Ответственный | Срок |
+|---|---------|----------|---------------|------|
+
+### Решение 1: [Название]
+- **Что решили:** [Детали]
+- **Аргументы за:** [Почему]
+- **Возражения:** [Если были]
+
+---
+
+## Задачи и следующие шаги
+
+| # | Задача | Ответственный | Дедлайн | Приоритет |
+|---|--------|---------------|---------|-----------|
+
+---
+
+## Открытые вопросы и риски
+
+### Нерешённые вопросы:
+1. **[Вопрос]** — [Почему не решили]
+
+### Риски:
+| Риск | Вероятность | Влияние | Митигация |
+|------|-------------|---------|-----------|
+
+---
+
+## Reality Check
+
+### Что хорошо:
+- [Позитив]
+
+### Что вызывает вопросы:
+- [Проблема]
+
+### Скрытые течения:
+- [Между строк]
+
+---
+
+## Главные выводы
+
+1. **[Вывод 1]** — [Объяснение]
+2. **[Вывод 2]** — [Объяснение]
+
+---
+
+## Полный список затронутых тем
+
+| # | Тема | Глубина | Статус |
+|---|------|---------|--------|
+| 1 | [Тема] | Подробно/Кратко/Упоминание | Решено/Открыто |
+"""
+
+def analyze_transcript(transcript: str, duration: float, speakers: int) -> str:
+    client = OpenAI(api_key=OPENAI_KEY)
     
-    lang_map = {
-        "ru": "русский",
-        "en": "English",
-        "kk": "қазақ тілі",
-        "original": "тот же язык, что и в транскрипте"
-    }
-    
-    prompt = ANALYSIS_PROMPT.format(output_language=lang_map.get(output_language, "русский"))
-    
-    response = openai_client.chat.completions.create(
+    resp = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": f"Транскрипт:\n\n{transcript}"}
+            {"role": "system", "content": ANALYSIS_PROMPT},
+            {"role": "user", "content": f"Проанализируй транскрипт:\n\n{transcript[:50000]}"}
         ],
         temperature=0.3,
-        max_tokens=8000,
-        response_format={"type": "json_object"}
+        max_tokens=8000
     )
     
-    content = response.choices[0].message.content
+    analysis = resp.choices[0].message.content
+    duration_str = f"{int(duration // 60)} мин {int(duration % 60)} сек"
     
-    # Логируем для отладки
-    print("=== GPT RESPONSE START ===")
-    print(content[:500])
-    print("=== GPT RESPONSE END ===")
-    
-    # Очистка
-    content = content.strip()
-    content = re.sub(r'^```json\s*', '', content)
-    content = re.sub(r'^```\s*', '', content)
-    content = re.sub(r'\s*```$', '', content)
-    content = content.strip()
-    
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError as e:
-        print(f"JSON Error: {e}")
-        print(f"Content: {content[:200]}")
-        
-        # Пробуем найти JSON
-        match = re.search(r'\{[\s\S]*\}', content)
-        if match:
-            try:
-                return json.loads(match.group())
-            except:
-                pass
-        
-        # Возвращаем базовую структуру если всё сломалось
-        return {
-            "summary": "Не удалось проанализировать. Попробуй ещё раз.",
-            "topics": [],
-            "participants": [],
-            "overall_decisions": [],
-            "action_items": [],
-            "agreements": [],
-            "disagreements": [],
-            "risks": [],
-            "opportunities": [],
-            "expert_recommendations": ["Попробуй загрузить файл ещё раз"],
-            "next_steps": {"urgent": [], "medium": [], "long": []},
-            "meeting_effectiveness": {"score": 0, "comment": "Ошибка анализа"}
-        }
+    return f"""{analysis}
 
-def format_summary(analysis: dict) -> str:
-    """Форматирует краткое саммари"""
-    
-    text = "📋 **АНАЛИЗ ВСТРЕЧИ**\n\n"
-    text += f"**Резюме:**\n{analysis.get('summary', 'Нет данных')}\n\n"
-    
-    # Участники
-    participants = analysis.get('participants', [])
-    if participants:
-        text += f"**Участники:** {', '.join(participants)}\n\n"
-    
-    # Темы
-    topics = analysis.get('topics', [])
-    if topics:
-        text += f"**Обсуждалось {len(topics)} тем:**\n"
-        for t in topics:
-            percent = t.get('duration_percent', 0)
-            text += f"• {t['title']} ({percent}%)\n"
-        text += "\n👇 Нажми на тему для подробностей"
-    
-    # Эффективность
-    effectiveness = analysis.get('meeting_effectiveness', {})
-    if effectiveness:
-        score = effectiveness.get('score', '?')
-        text += f"\n\n📊 **Эффективность:** {score}/10"
-    
-    return text
+---
+**Статистика:** {duration_str} | {speakers} участник(ов) | {len(transcript.split())} слов"""
 
+def custom_analysis(transcript: str, user_criteria: str) -> str:
+    client = OpenAI(api_key=OPENAI_KEY)
+    
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": f"Извлеки из транскрипта информацию по критериям:\n{user_criteria}\nБудь детальным, приводи цитаты."},
+            {"role": "user", "content": f"ТРАНСКРИПТ:\n{transcript[:50000]}"}
+        ],
+        temperature=0.3,
+        max_tokens=6000
+    )
+    return resp.choices[0].message.content
 
-def format_topic_detail(topic: dict, topic_num: int) -> str:
-    """Форматирует детальную информацию по теме"""
-    
-    text = f"📌 **ТЕМА {topic_num}: {topic['title']}**\n\n"
-    
-    # Ключевые тезисы
-    key_points = topic.get('key_points', [])
-    if key_points:
-        text += "**Ключевые тезисы:**\n"
-        for point in key_points:
-            text += f"• {point}\n"
-        text += "\n"
-    
-    # Цитаты
-    quotes = topic.get('quotes', [])
-    if quotes:
-        text += "**Цитаты:**\n"
-        for q in quotes:
-            author = q.get('author') or 'Участник'
-            text += f"💬 \"{q['text']}\" — {author}\n"
-        text += "\n"
-    
-    # Решения по теме
-    decisions = topic.get('decisions', [])
-    if decisions:
-        text += "**Решения:**\n"
-        for d in decisions:
-            text += f"✅ {d}\n"
-        text += "\n"
-    
-    # Открытые вопросы
-    open_q = topic.get('open_questions', [])
-    if open_q:
-        text += "**Открытые вопросы:**\n"
-        for q in open_q:
-            text += f"❓ {q}\n"
-        text += "\n"
-    
-    # Комментарий эксперта
-    expert = topic.get('expert_comment')
-    if expert:
-        text += f"🧠 **Цифровой Умник:**\n{expert}\n"
-    
-    return text
-
-
-def format_full_analysis(analysis: dict) -> str:
-    """Форматирует полный анализ"""
-    
-    text = "📊 **ПОЛНЫЙ АНАЛИЗ**\n\n"
-    
-    # Решения
-    decisions = analysis.get('overall_decisions', [])
-    if decisions:
-        text += "**✅ Принятые решения:**\n"
-        for d in decisions:
-            text += f"• {d}\n"
-        text += "\n"
-    
-    # Action items
-    actions = analysis.get('action_items', [])
-    if actions:
-        text += "**📝 Задачи:**\n"
-        for a in actions:
-            resp = a.get('responsible') or 'Не назначен'
-            deadline = a.get('deadline') or 'Не указан'
-            text += f"• {a['task']}\n  → {resp} | {deadline}\n"
-        text += "\n"
-    
-    # Согласия
-    agreements = analysis.get('agreements', [])
-    if agreements:
-        text += "**🤝 Точки согласия:**\n"
-        for a in agreements:
-            text += f"• {a}\n"
-        text += "\n"
-    
-    # Разногласия
-    disagreements = analysis.get('disagreements', [])
-    if disagreements:
-        text += "**⚡ Разногласия:**\n"
-        for d in disagreements:
-            text += f"• {d}\n"
-        text += "\n"
-    
-    # Риски
-    risks = analysis.get('risks', [])
-    if risks:
-        text += "**⚠️ Риски:**\n"
-        for r in risks:
-            text += f"• {r}\n"
-        text += "\n"
-    
-    # Возможности
-    opportunities = analysis.get('opportunities', [])
-    if opportunities:
-        text += "**💡 Возможности:**\n"
-        for o in opportunities:
-            text += f"• {o}\n"
-        text += "\n"
-    
-    return text
-
-
-def format_recommendations(analysis: dict) -> str:
-    """Форматирует рекомендации"""
-    
-    text = "🧠 **РЕКОМЕНДАЦИИ ЦИФРОВОГО УМНИКА**\n\n"
-    
-    # Рекомендации
-    recs = analysis.get('expert_recommendations', [])
-    if recs:
-        for i, r in enumerate(recs, 1):
-            text += f"{i}. {r}\n\n"
-    
-    # План действий
-    next_steps = analysis.get('next_steps', {})
-    if next_steps:
-        text += "**📅 План действий:**\n\n"
-        
-        urgent = next_steps.get('urgent', [])
-        if urgent:
-            text += "🔴 **Срочно (1-7 дней):**\n"
-            for u in urgent:
-                text += f"• {u}\n"
-            text += "\n"
-        
-        medium = next_steps.get('medium', [])
-        if medium:
-            text += "🟡 **Среднесрок (1-4 недели):**\n"
-            for m in medium:
-                text += f"• {m}\n"
-            text += "\n"
-        
-        long = next_steps.get('long', [])
-        if long:
-            text += "🟢 **Долгосрок (1-3 месяца):**\n"
-            for l in long:
-                text += f"• {l}\n"
-    
-    return text
-
-
-def get_topics_keyboard(analysis: dict, user_id: int) -> InlineKeyboardMarkup:
-    """Создает клавиатуру с темами"""
-    
-    buttons = []
-    topics = analysis.get('topics', [])
-    
-    for i, topic in enumerate(topics):
-        title = topic['title'][:30] + "..." if len(topic['title']) > 30 else topic['title']
-        buttons.append([InlineKeyboardButton(
-            f"📌 {i+1}. {title}",
-            callback_data=f"topic_{user_id}_{i}"
-        )])
-    
-    buttons.append([
-        InlineKeyboardButton("📊 Полный анализ", callback_data=f"full_{user_id}"),
-        InlineKeyboardButton("🧠 Советы", callback_data=f"recs_{user_id}")
-    ])
-    
-    return InlineKeyboardMarkup(buttons)
-
-
-def get_back_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """Кнопка назад"""
+# === KEYBOARDS ===
+def get_after_analysis_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅️ К списку тем", callback_data=f"back_{user_id}")]
+        [InlineKeyboardButton("📄 PDF светлый", callback_data="pdf_light"),
+         InlineKeyboardButton("🌙 PDF тёмный", callback_data="pdf_dark")],
+        [InlineKeyboardButton("🌐 HTML светлый", callback_data="html_light"),
+         InlineKeyboardButton("🌑 HTML тёмный", callback_data="html_dark")],
+        [InlineKeyboardButton("📝 Свои критерии", callback_data="custom_criteria")],
+        [InlineKeyboardButton("📜 Транскрипт", callback_data="get_transcript")],
+        [InlineKeyboardButton("🔄 Перегенерировать", callback_data="regenerate")]
     ])
 
+def get_retry_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Попробовать снова", callback_data="retry_transcribe")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="cancel")]
+    ])
 
-def get_language_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура выбора языка"""
-    buttons = []
-    for code, name in LANGUAGES.items():
-        buttons.append([InlineKeyboardButton(name, callback_data=f"lang_{user_id}_{code}")])
-    return InlineKeyboardMarkup(buttons)
+def get_continue_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📄 PDF светлый", callback_data="pdf_light_custom"),
+         InlineKeyboardButton("🌙 PDF тёмный", callback_data="pdf_dark_custom")],
+        [InlineKeyboardButton("📝 Ещё критерии", callback_data="custom_criteria")],
+        [InlineKeyboardButton("✅ Готово", callback_data="done")]
+    ])
 
-
-# ============= HANDLERS =============
+# === BOT SETUP ===
+app = Client(
+    "meeting_bot_v3",
+    api_id=int(API_ID),
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN
+)
 
 @app.on_message(filters.command("start"))
-async def start_handler(client: Client, message: Message):
-    await message.reply(
-        "👋 Привет! Я **Цифровой Умник**.\n\n"
-        "Отправь мне:\n"
-        "• 🎤 Аудио или голосовое сообщение\n"
-        "• 🎬 Видеофайл\n"
-        "• 🔗 Ссылку на YouTube\n"
-        "• 🌐 Прямую ссылку на аудио/видео\n\n"
-        "Я проанализирую встречу и разобью на темы!"
-    )
+async def start_handler(client, message):
+    await message.reply("""👋 **Meeting Analyzer Bot v3**
 
+Отправь аудио/видео встречи и получи:
 
-@app.on_message(filters.text & filters.private & ~filters.command("start"))
-async def link_handler(client: Client, message: Message):
-    """Обработка ссылок"""
-    
-    text = message.text.strip()
-    
-    # Проверяем YouTube
-    youtube_pattern = r'(https?://)?(www\.)?(youtube\.com|youtu\.be)/.+'
-    is_youtube = re.match(youtube_pattern, text)
-    
-    # Проверяем прямую ссылку
-    url_pattern = r'https?://[^\s]+'
-    is_url = re.match(url_pattern, text)
-    
-    if is_youtube or is_url:
-        user_data[message.from_user.id] = {
-            "type": "youtube" if is_youtube else "url",
-            "source": text,
-            "message_id": message.id
-        }
-        
-        await message.reply(
-            "🌐 **Выбери язык результата:**",
-            reply_markup=get_language_keyboard(message.from_user.id)
-        )
-    else:
-        await message.reply(
-            "Отправь мне аудио, видео или ссылку на YouTube 🎤"
-        )
+📝 Детальное резюме с раскрытием каждой темы
+👥 Позиции участников с цитатами  
+✅ Решения с контекстом
+📌 Action items с приоритетами
+📚 Полный список всех тем
+🔍 Reality check
 
+**Форматы:** PDF/HTML (светлая/тёмная тема)
+**Фичи:** Retry, свои критерии, до 4GB
 
-@app.on_message((filters.audio | filters.voice | filters.video | filters.video_note | filters.document) & filters.private)
-async def media_handler(client: Client, message: Message):
-    """Обработка медиафайлов"""
-    
-    user_data[message.from_user.id] = {
-        "type": "file",
-        "message": message,
-        "message_id": message.id
-    }
-    
-    await message.reply(
-        "🌐 **На каком языке хочешь получить анализ?**",
-        reply_markup=get_language_keyboard(message.from_user.id)
-    )
+Отправь файл! 🎙️""")
 
-
-@app.on_callback_query(filters.regex(r"^lang_"))
-async def language_callback(client: Client, callback: CallbackQuery):
-    """Обработка выбора языка"""
+@app.on_message(filters.audio | filters.video | filters.voice | filters.video_note | filters.document)
+async def media_handler(client, message):
+    if message.document:
+        mime = message.document.mime_type or ""
+        if not ("audio" in mime or "video" in mime or "octet-stream" in mime):
+            return
     
-    parts = callback.data.split("_")
-    user_id = int(parts[1])
-    lang_code = parts[2]
-    
-    if callback.from_user.id != user_id:
-        await callback.answer("Это не твой запрос!", show_alert=True)
-        return
-    
-    if user_id not in user_data:
-        await callback.answer("Сессия истекла. Отправь файл заново.", show_alert=True)
-        return
-    
-    data = user_data[user_id]
-    data["language"] = lang_code
-    
-    await callback.message.edit_text(
-        f"✅ Язык: {LANGUAGES[lang_code]}\n\n⏳ Начинаю обработку..."
-    )
-    
-    file_path = None
+    user_id = message.from_user.id
+    cache = get_user_cache(user_id)
+    status_msg = await message.reply("⏳ Скачиваю файл...")
     
     try:
-        # Скачиваем файл
-        if data["type"] == "youtube":
-            await callback.message.edit_text(
-                f"✅ Язык: {LANGUAGES[lang_code]}\n\n📥 Скачиваю с YouTube..."
-            )
-            file_path = await download_youtube(data["source"])
-            if not file_path:
-                await callback.message.edit_text("❌ Не удалось скачать видео с YouTube")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = await message.download(file_name=f"{tmpdir}/media")
+            cache["file_path"] = file_path
+            
+            await status_msg.edit_text("✅ Скачано!\n\n🎙️ Транскрибирую...")
+            
+            trans_result, error = transcribe_file(file_path)
+            
+            if error:
+                await status_msg.edit_text(f"❌ Ошибка: {error}", reply_markup=get_retry_keyboard())
                 return
+            
+            cache["transcript"] = trans_result["transcript"]
+            cache["duration"] = trans_result["duration"]
+            cache["speakers"] = trans_result["speakers"]
+            
+            await status_msg.edit_text(f"✅ Транскрипция готова!\n👥 Спикеров: {trans_result['speakers']}\n\n🧠 Анализирую...")
+            
+            summary = analyze_transcript(trans_result["transcript"], trans_result["duration"], trans_result["speakers"])
+            cache["last_summary"] = summary
+            
+            await status_msg.delete()
+            
+            preview = summary[:3500] + "..." if len(summary) > 3500 else summary
+            await message.reply(f"📋 **Превью:**\n\n{preview}")
+            await message.reply("✨ **Выбери формат:**", reply_markup=get_after_analysis_keyboard())
                 
-        elif data["type"] == "url":
-            await callback.message.edit_text(
-                f"✅ Язык: {LANGUAGES[lang_code]}\n\n📥 Скачиваю файл..."
-            )
-            file_path = await download_from_url(data["source"])
-            if not file_path:
-                await callback.message.edit_text("❌ Не удалось скачать файл")
-                return
-                
-        elif data["type"] == "file":
-            await callback.message.edit_text(
-                f"✅ Язык: {LANGUAGES[lang_code]}\n\n📥 Скачиваю файл..."
-            )
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp:
-                file_path = await data["message"].download(tmp.name)
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Ошибка: {str(e)}", reply_markup=get_retry_keyboard())
+
+@app.on_callback_query()
+async def callback_handler(client, callback_query):
+    user_id = callback_query.from_user.id
+    data = callback_query.data
+    cache = get_user_cache(user_id)
+    
+    if data.startswith("pdf_") or data.startswith("html_"):
+        parts = data.split("_")
+        format_type = parts[0]
+        theme = parts[1]
+        is_custom = len(parts) > 2
         
-        # Транскрибируем
-        await callback.message.edit_text(
-            f"✅ Язык: {LANGUAGES[lang_code]}\n\n🎤 Распознаю речь..."
-        )
-        transcript = await transcribe_audio(file_path)
-        
-        if not transcript or len(transcript) < 50:
-            await callback.message.edit_text("❌ Не удалось распознать речь. Проверь качество аудио.")
+        content_key = "last_custom_result" if is_custom else "last_summary"
+        if content_key not in cache:
+            await callback_query.answer("❌ Контент не найден")
             return
         
-        # Анализируем
-        await callback.message.edit_text(
-            f"✅ Язык: {LANGUAGES[lang_code]}\n\n🧠 Анализирую содержание..."
+        await callback_query.answer(f"📄 Генерирую {format_type.upper()}...")
+        status_msg = await callback_query.message.edit_text(f"⏳ Генерирую {format_type.upper()}...")
+        
+        try:
+            content = cache[content_key]
+            if format_type == "pdf":
+                file_path = generate_pdf(content, theme)
+            else:
+                file_path = generate_html(content, theme)
+            
+            await status_msg.delete()
+            await callback_query.message.reply_document(
+                document=file_path, 
+                caption=f"{'📄 PDF' if format_type == 'pdf' else '🌐 HTML'} ({theme})"
+            )
+            os.remove(file_path)
+            await callback_query.message.reply("✨ **Что ещё?**", reply_markup=get_after_analysis_keyboard())
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Ошибка: {str(e)}", reply_markup=get_after_analysis_keyboard())
+    
+    elif data == "custom_criteria":
+        cache["stage"] = "waiting_criteria"
+        await callback_query.answer()
+        await callback_query.message.edit_text(
+            "📝 **Введи критерии:**\n\n"
+            "Примеры:\n"
+            "• Какие бюджеты обсуждались?\n"
+            "• Что сказал X про Y?\n"
+            "• Список всех рисков"
         )
-        analysis = await analyze_meeting(transcript, lang_code)
-        
-        # Сохраняем результат
-        user_data[user_id]["analysis"] = analysis
-        user_data[user_id]["transcript"] = transcript
-        
-        # Отправляем результат
-        await callback.message.edit_text(
-            format_summary(analysis),
-            reply_markup=get_topics_keyboard(analysis, user_id),
-            parse_mode="Markdown"
-        )
-        
-    except json.JSONDecodeError as e:
-        print(f"JSON Error: {e}")
-        await callback.message.edit_text("❌ Ошибка анализа. Попробуй ещё раз.")
-    except Exception as e:
-        print(f"Error: {type(e).__name__}: {e}")
-        await callback.message.edit_text(f"❌ Ошибка: {type(e).__name__}")
-    finally:
-        if file_path and os.path.exists(file_path):
-            os.unlink(file_path)
-@app.on_callback_query(filters.regex(r"^topic_"))
-async def topic_callback(client: Client, callback: CallbackQuery):
-    """Показать детали темы"""
     
-    parts = callback.data.split("_")
-    user_id = int(parts[1])
-    topic_idx = int(parts[2])
+    elif data == "get_transcript":
+        if "transcript" not in cache:
+            await callback_query.answer("❌ Нет транскрипта")
+            return
+        await callback_query.answer("📄 Отправляю...")
+        transcript = cache["transcript"]
+        for i in range(0, len(transcript), 4000):
+            await callback_query.message.reply(f"📜 **Транскрипт:**\n\n{transcript[i:i+4000]}")
+        await callback_query.message.reply("✨ **Что дальше?**", reply_markup=get_after_analysis_keyboard())
     
-    if callback.from_user.id != user_id:
-        await callback.answer("Это не твой запрос!", show_alert=True)
-        return
+    elif data == "regenerate":
+        if "transcript" not in cache:
+            await callback_query.answer("❌ Нет транскрипта")
+            return
+        await callback_query.answer("🔄 Генерирую...")
+        status_msg = await callback_query.message.edit_text("🧠 Перегенерирую резюме...")
+        try:
+            summary = analyze_transcript(cache["transcript"], cache.get("duration", 0), cache.get("speakers", 1))
+            cache["last_summary"] = summary
+            await status_msg.delete()
+            preview = summary[:3500] + "..." if len(summary) > 3500 else summary
+            await callback_query.message.reply(f"📋 **Превью:**\n\n{preview}")
+            await callback_query.message.reply("✨ **Формат:**", reply_markup=get_after_analysis_keyboard())
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Ошибка: {str(e)}", reply_markup=get_after_analysis_keyboard())
     
-    if user_id not in user_data or "analysis" not in user_data[user_id]:
-        await callback.answer("Сессия истекла", show_alert=True)
-        return
+    elif data == "done":
+        await callback_query.answer("✅ Готово!")
+        await callback_query.message.edit_text("✅ **Готово!**\n\nОтправь новый файл для следующей встречи! 🎙️")
     
-    analysis = user_data[user_id]["analysis"]
-    topics = analysis.get("topics", [])
-    
-    if topic_idx >= len(topics):
-        await callback.answer("Тема не найдена", show_alert=True)
-        return
-    
-    topic = topics[topic_idx]
-    
-    await callback.message.edit_text(
-        format_topic_detail(topic, topic_idx + 1),
-        reply_markup=get_back_keyboard(user_id),
-        parse_mode="Markdown"
-    )
+    elif data == "cancel":
+        await callback_query.answer("❌ Отменено")
+        await callback_query.message.edit_text("❌ Отменено. Отправь файл заново.")
 
+@app.on_message(filters.text & ~filters.command(["start"]))
+async def text_handler(client, message):
+    user_id = message.from_user.id
+    cache = get_user_cache(user_id)
+    
+    if cache.get("stage") == "waiting_criteria" and "transcript" in cache:
+        status_msg = await message.reply("🧠 Анализирую по твоим критериям...")
+        try:
+            result = custom_analysis(cache["transcript"], message.text)
+            cache["last_custom_result"] = result
+            cache["stage"] = "done"
+            await status_msg.delete()
+            await message.reply(f"📋 **Результат:**\n\n{result}")
+            await message.reply("✨ **Сохранить или продолжить?**", reply_markup=get_continue_keyboard())
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Ошибка: {str(e)}", reply_markup=get_continue_keyboard())
+    else:
+        await message.reply("🎙️ Отправь аудио/видео файл для анализа!")
 
-@app.on_callback_query(filters.regex(r"^full_"))
-async def full_callback(client: Client, callback: CallbackQuery):
-    """Показать полный анализ"""
-    
-    user_id = int(callback.data.split("_")[1])
-    
-    if callback.from_user.id != user_id:
-        await callback.answer("Это не твой запрос!", show_alert=True)
-        return
-    
-    if user_id not in user_data or "analysis" not in user_data[user_id]:
-        await callback.answer("Сессия истекла", show_alert=True)
-        return
-    
-    analysis = user_data[user_id]["analysis"]
-    
-    await callback.message.edit_text(
-        format_full_analysis(analysis),
-        reply_markup=get_back_keyboard(user_id),
-        parse_mode="Markdown"
-    )
-
-
-@app.on_callback_query(filters.regex(r"^recs_"))
-async def recs_callback(client: Client, callback: CallbackQuery):
-    """Показать рекомендации"""
-    
-    user_id = int(callback.data.split("_")[1])
-    
-    if callback.from_user.id != user_id:
-        await callback.answer("Это не твой запрос!", show_alert=True)
-        return
-    
-    if user_id not in user_data or "analysis" not in user_data[user_id]:
-        await callback.answer("Сессия истекла", show_alert=True)
-        return
-    
-    analysis = user_data[user_id]["analysis"]
-    
-    await callback.message.edit_text(
-        format_recommendations(analysis),
-        reply_markup=get_back_keyboard(user_id),
-        parse_mode="Markdown"
-    )
-
-
-@app.on_callback_query(filters.regex(r"^back_"))
-async def back_callback(client: Client, callback: CallbackQuery):
-    """Вернуться к списку тем"""
-    
-    user_id = int(callback.data.split("_")[1])
-    
-    if callback.from_user.id != user_id:
-        await callback.answer("Это не твой запрос!", show_alert=True)
-        return
-    
-    if user_id not in user_data or "analysis" not in user_data[user_id]:
-        await callback.answer("Сессия истекла", show_alert=True)
-        return
-    
-    analysis = user_data[user_id]["analysis"]
-    
-    await callback.message.edit_text(
-        format_summary(analysis),
-        reply_markup=get_topics_keyboard(analysis, user_id),
-        parse_mode="Markdown"
-    )
-
-
-# ============= RUN =============
 if __name__ == "__main__":
-    print("Starting Цифровой Умник...")
+    print("🚀 Starting Meeting Analyzer Bot v3...")
     app.run()
