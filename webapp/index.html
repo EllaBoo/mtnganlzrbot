@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Цифровой Умник</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root {
+    --bg: #0f0f1a;
+    --surface: #1a1a2e;
+    --surface2: #232340;
+    --accent: #7c3aed;
+    --accent2: #a855f7;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --border: #334155;
+    --glow: rgba(124, 58, 237, 0.3);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, system-ui, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+/* ═══ HEADER ═══ */
+.header {
+    padding: 24px 16px 16px;
+    text-align: center;
+    position: relative;
+    background: linear-gradient(180deg, rgba(124,58,237,0.08) 0%, transparent 100%);
+}
+.header::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 16px; right: 16px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+}
+.logo { font-size: 36px; margin-bottom: 4px; }
+.title { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+.subtitle { font-size: 13px; color: var(--text2); margin-top: 4px; }
+.brain-pulse {
+    display: inline-block;
+    animation: brain-pulse 2s ease-in-out infinite;
+}
+@keyframes brain-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+}
+
+/* ═══ TABS ═══ */
+.tabs {
+    display: flex;
+    padding: 12px 16px 0;
+    gap: 6px;
+}
+.tab {
+    flex: 1;
+    padding: 10px 8px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 700;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.25s;
+    background: var(--surface);
+    color: var(--text2);
+    border: 1px solid var(--border);
+}
+.tab.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+    box-shadow: 0 4px 20px var(--glow);
+}
+
+/* ═══ PANELS ═══ */
+.content { padding: 16px; }
+.panel { display: none; animation: fadeIn 0.3s; }
+.panel.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ═══ CARDS ═══ */
+.card {
+    background: var(--surface);
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    transition: border-color 0.2s;
+}
+.card:hover { border-color: rgba(124,58,237,0.3); }
+.card-label {
+    font-size: 11px;
+    color: var(--text2);
+    margin-bottom: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* ═══ INPUTS ═══ */
+.url-input {
+    width: 100%;
+    padding: 14px 16px;
+    background: var(--surface2);
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    color: var(--text);
+    font-size: 15px;
+    outline: none;
+    transition: all 0.2s;
+}
+.url-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--glow);
+}
+.url-input::placeholder { color: var(--text2); opacity: 0.5; }
+
+/* ═══ BUTTONS ═══ */
+.btn {
+    width: 100%;
+    padding: 16px;
+    border: none;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: 12px;
+}
+.btn-primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: white;
+    box-shadow: 0 4px 20px var(--glow);
+}
+.btn-primary:active { transform: scale(0.98); }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+/* ═══ RECORD ═══ */
+.record-area { text-align: center; padding: 24px 0; }
+.record-btn {
+    width: 88px; height: 88px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: 4px solid rgba(124,58,237,0.3);
+    cursor: pointer;
+    position: relative;
+    transition: all 0.3s;
+    box-shadow: 0 4px 30px var(--glow);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.record-btn:active { transform: scale(0.92); }
+.record-btn.recording {
+    animation: pulse-rec 1.2s infinite;
+    background: linear-gradient(135deg, var(--danger), #dc2626);
+    border-color: rgba(239,68,68,0.3);
+    box-shadow: 0 4px 30px rgba(239,68,68,0.4);
+}
+.record-btn svg { width: 36px; height: 36px; fill: white; }
+.rec-time {
+    margin-top: 16px;
+    font-size: 24px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--text2);
+}
+.rec-hint {
+    font-size: 13px;
+    color: var(--text2);
+    margin-top: 12px;
+    line-height: 1.5;
+}
+@keyframes pulse-rec {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); }
+    50% { box-shadow: 0 0 0 24px rgba(239,68,68,0); }
+}
+
+/* ═══ UPLOAD ZONE ═══ */
+.upload-zone {
+    border: 2px dashed var(--border);
+    border-radius: 16px;
+    padding: 32px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.upload-zone:active {
+    border-color: var(--accent);
+    background: rgba(124,58,237,0.05);
+}
+.upload-icon { font-size: 44px; margin-bottom: 8px; }
+.upload-text { font-size: 14px; color: var(--text2); line-height: 1.5; }
+
+/* ═══ PROCESSING ═══ */
+.processing { text-align: center; padding: 40px 0; }
+.spinner-ring {
+    width: 64px; height: 64px;
+    border: 4px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 24px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.stage-label {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 20px;
+}
+.pipeline-steps {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    max-width: 280px;
+    margin: 0 auto;
+}
+.step-pip {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    transition: all 0.3s;
+}
+.step-pip.done { background: var(--success); border-color: var(--success); }
+.step-pip.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    animation: pip-pulse 1s infinite;
+    box-shadow: 0 0 16px var(--glow);
+}
+@keyframes pip-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.15); }
+}
+
+/* ═══ REPORT ═══ */
+.report-section { margin-bottom: 16px; }
+.report-badge {
+    display: inline-block;
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.badge-domain { background: var(--accent); color: white; }
+.badge-expert { background: rgba(124,58,237,0.2); color: var(--accent2); }
+
+.swot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.swot-cell {
+    padding: 14px;
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.swot-s { background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.25); }
+.swot-w { background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.25); }
+.swot-o { background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.25); }
+.swot-t { background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.25); }
+.swot-label {
+    font-weight: 800;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
+/* ═══ HISTORY ═══ */
+.history-item {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.history-item:active { border-color: var(--accent); transform: scale(0.99); }
+.history-meta { font-size: 12px; color: var(--text2); }
+.history-title { font-weight: 700; margin-top: 4px; font-size: 15px; }
+.history-domain {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    background: rgba(124,58,237,0.15);
+    color: var(--accent2);
+    margin-top: 6px;
+}
+.empty-state {
+    text-align: center;
+    padding: 48px 16px;
+    color: var(--text2);
+}
+.empty-icon { font-size: 48px; margin-bottom: 16px; }
+
+/* ═══ BOTTOM NAV ═══ */
+.spacer { height: 72px; }
+.bottom-nav {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    padding: 6px 0;
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
+    z-index: 100;
+}
+.nav-btn {
+    flex: 1;
+    text-align: center;
+    padding: 6px 0;
+    cursor: pointer;
+    transition: color 0.2s;
+    color: var(--text2);
+}
+.nav-btn.active { color: var(--accent); }
+.nav-icon { font-size: 24px; }
+.nav-text { font-size: 10px; margin-top: 2px; font-weight: 600; }
+
+/* ═══ SOURCE BADGES ═══ */
+.sources {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+.source-tag {
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.source-tag:active {
+    border-color: var(--accent);
+    background: rgba(124,58,237,0.1);
+}
+</style>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<div class="header">
+    <div class="logo"><span class="brain-pulse">🧠</span></div>
+    <div class="title">Цифровой Умник</div>
+    <div class="subtitle">AI-эксперт • Любая область • Честный анализ</div>
+</div>
+
+<!-- ═══ TABS ═══ -->
+<div class="tabs" id="mainTabs">
+    <div class="tab active" data-tab="analyze">🎯 Анализ</div>
+    <div class="tab" data-tab="record">🎤 Запись</div>
+    <div class="tab" data-tab="history">📋 История</div>
+</div>
+
+<div class="content">
+
+    <!-- ═══ ANALYZE PANEL ═══ -->
+    <div class="panel active" id="p-analyze">
+        <div class="card">
+            <div class="card-label">🔗 Ссылка на контент</div>
+            <input class="url-input" id="urlInput" type="url"
+                   placeholder="YouTube, Google Drive, Dropbox, Vimeo...">
+            <div class="sources">
+                <span class="source-tag" onclick="setUrl('youtube')">▶️ YouTube</span>
+                <span class="source-tag" onclick="setUrl('drive')">📁 Drive</span>
+                <span class="source-tag" onclick="setUrl('dropbox')">📦 Dropbox</span>
+                <span class="source-tag" onclick="setUrl('vimeo')">🎬 Vimeo</span>
+            </div>
+            <button class="btn btn-primary" id="analyzeBtn" onclick="startAnalysis()">
+                🧠 Анализировать
+            </button>
+        </div>
+
+        <div class="card">
+            <div class="card-label">📁 Загрузить файл</div>
+            <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
+                <div class="upload-icon">📤</div>
+                <div class="upload-text">
+                    Аудио или видео файл<br>
+                    <small style="color: var(--text2)">MP3, MP4, WAV, M4A, OGG • до 500MB</small>
+                </div>
+            </div>
+            <input type="file" id="fileInput" accept="audio/*,video/*" hidden onchange="handleFile(this)">
+        </div>
+
+        <div class="card" style="text-align: center; padding: 16px;">
+            <div style="font-size: 13px; color: var(--text2);">
+                💡 Умник адаптируется к <b>ЛЮБОЙ</b> области:<br>
+                бизнес • маркетинг • медицина • право<br>
+                HR • продукт • образование • психология
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ RECORD PANEL ═══ -->
+    <div class="panel" id="p-record">
+        <div class="card">
+            <div class="card-label">🎤 Запись аудио</div>
+            <div class="record-area">
+                <button class="record-btn" id="recBtn" onclick="toggleRecord()">
+                    <svg id="micIcon" viewBox="0 0 24 24">
+                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                    </svg>
+                    <svg id="stopIcon" viewBox="0 0 24 24" style="display:none">
+                        <rect x="6" y="6" width="12" height="12" rx="2"/>
+                    </svg>
+                </button>
+                <div class="rec-time" id="recTime">00:00</div>
+            </div>
+            <div class="rec-hint">
+                Нажми для записи 🎙️<br>
+                Нажми ещё раз — отправлю на анализ
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ HISTORY PANEL ═══ -->
+    <div class="panel" id="p-history">
+        <div id="historyList">
+            <div class="empty-state">
+                <div class="empty-icon">📋</div>
+                <div>Отчёты появятся здесь<br>после первого анализа</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ PROCESSING PANEL ═══ -->
+    <div class="panel" id="p-processing">
+        <div class="processing">
+            <div class="spinner-ring"></div>
+            <div class="stage-label" id="stageLabel">🔍 Определяю источник...</div>
+            <div class="pipeline-steps" id="pipeSteps"></div>
+        </div>
+    </div>
+
+    <!-- ═══ REPORT PANEL ═══ -->
+    <div class="panel" id="p-report"></div>
+</div>
+
+<div class="spacer"></div>
+
+<!-- ═══ BOTTOM NAV ═══ -->
+<div class="bottom-nav">
+    <div class="nav-btn active" data-tab="analyze">
+        <div class="nav-icon">🎯</div>
+        <div class="nav-text">Анализ</div>
+    </div>
+    <div class="nav-btn" data-tab="record">
+        <div class="nav-icon">🎤</div>
+        <div class="nav-text">Запись</div>
+    </div>
+    <div class="nav-btn" data-tab="history">
+        <div class="nav-icon">📋</div>
+        <div class="nav-text">История</div>
+    </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════
+// TELEGRAM WEBAPP INIT
+// ═══════════════════════════════════════════
+const tg = window.Telegram?.WebApp;
+if (tg) {
+    tg.expand();
+    tg.enableClosingConfirmation();
+    // Apply Telegram theme colors if available
+    if (tg.themeParams?.bg_color) {
+        document.documentElement.style.setProperty('--bg', tg.themeParams.bg_color);
+    }
+}
+
+// ═══════════════════════════════════════════
+// TAB SWITCHING
+// ═══════════════════════════════════════════
+function switchTab(tabName) {
+    document.querySelectorAll('.tab').forEach(t =>
+        t.classList.toggle('active', t.dataset.tab === tabName));
+    document.querySelectorAll('.nav-btn').forEach(n =>
+        n.classList.toggle('active', n.dataset.tab === tabName));
+    document.querySelectorAll('.panel').forEach(p =>
+        p.classList.toggle('active', p.id === `p-${tabName}`));
+}
+
+document.querySelectorAll('.tab, .nav-btn').forEach(el => {
+    el.addEventListener('click', () => {
+        if (el.dataset.tab) switchTab(el.dataset.tab);
+    });
+});
+
+// ═══════════════════════════════════════════
+// URL ANALYSIS
+// ═══════════════════════════════════════════
+function setUrl(type) {
+    const input = document.getElementById('urlInput');
+    const placeholders = {
+        youtube: 'https://youtube.com/watch?v=...',
+        drive: 'https://drive.google.com/file/d/...',
+        dropbox: 'https://www.dropbox.com/s/...',
+        vimeo: 'https://vimeo.com/...'
+    };
+    input.value = '';
+    input.placeholder = placeholders[type] || input.placeholder;
+    input.focus();
+}
+
+function startAnalysis() {
+    const url = document.getElementById('urlInput').value.trim();
+    if (!url) {
+        document.getElementById('urlInput').style.borderColor = 'var(--danger)';
+        setTimeout(() => {
+            document.getElementById('urlInput').style.borderColor = '';
+        }, 1500);
+        return;
+    }
+
+    // Send to Telegram bot
+    if (tg) {
+        tg.sendData(JSON.stringify({
+            action: 'analyze',
+            url: url,
+            timestamp: new Date().toISOString()
+        }));
+    }
+    showProcessing();
+}
+
+function handleFile(input) {
+    if (input.files.length > 0) {
+        const file = input.files[0];
+        if (tg) {
+            tg.sendData(JSON.stringify({
+                action: 'upload',
+                filename: file.name,
+                size: file.size,
+                type: file.type
+            }));
+        }
+        showProcessing();
+    }
+}
+
+// ═══════════════════════════════════════════
+// AUDIO RECORDING
+// ═══════════════════════════════════════════
+let isRecording = false;
+let mediaRecorder = null;
+let recordTimer = null;
+let recordSec = 0;
+let audioChunks = [];
+
+function toggleRecord() {
+    if (!isRecording) startRec();
+    else stopRec();
+}
+
+async function startRec() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(audioChunks, { type: 'audio/ogg' });
+            stream.getTracks().forEach(t => t.stop());
+
+            // Send notification to bot
+            if (tg) {
+                tg.sendData(JSON.stringify({
+                    action: 'recording_done',
+                    duration: recordSec
+                }));
+            }
+            showProcessing();
+        };
+
+        mediaRecorder.start(1000);
+        isRecording = true;
+
+        // UI updates
+        document.getElementById('recBtn').classList.add('recording');
+        document.getElementById('micIcon').style.display = 'none';
+        document.getElementById('stopIcon').style.display = 'block';
+
+        recordSec = 0;
+        recordTimer = setInterval(() => {
+            recordSec++;
+            const m = String(Math.floor(recordSec / 60)).padStart(2, '0');
+            const s = String(recordSec % 60).padStart(2, '0');
+            document.getElementById('recTime').textContent = `${m}:${s}`;
+        }, 1000);
+
+    } catch (e) {
+        alert('⚠️ Нет доступа к микрофону. Проверь разрешения.');
+    }
+}
+
+function stopRec() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+    }
+    isRecording = false;
+
+    document.getElementById('recBtn').classList.remove('recording');
+    document.getElementById('micIcon').style.display = 'block';
+    document.getElementById('stopIcon').style.display = 'none';
+    clearInterval(recordTimer);
+}
+
+// ═══════════════════════════════════════════
+// PROCESSING ANIMATION
+// ═══════════════════════════════════════════
+const STAGES = [
+    { icon: '🔍', label: 'Определяю источник...', expert: 'ds_url_resolver' },
+    { icon: '🎵', label: 'Извлекаю аудио...', expert: 'ds_audio_extractor' },
+    { icon: '📝', label: 'Транскрибирую...', expert: 'ds_transcriber' },
+    { icon: '🧩', label: 'Анализирую темы...', expert: 'ds_topic_extractor' },
+    { icon: '🧠', label: 'Экспертный анализ...', expert: 'ds_expert_analyzer' },
+    { icon: '📊', label: 'Формирую отчёт...', expert: 'ds_report_generator' },
+];
+let currentStage = 0;
+let stageTimer = null;
+
+function showProcessing() {
+    switchTab('processing');
+
+    // Build pipeline steps
+    const stepsEl = document.getElementById('pipeSteps');
+    stepsEl.innerHTML = STAGES.map((s, i) =>
+        `<div class="step-pip" id="pip-${i}" title="${s.expert}">${s.icon}</div>`
+    ).join('');
+
+    currentStage = 0;
+    advanceStage();
+}
+
+function advanceStage() {
+    if (currentStage >= STAGES.length) return;
+
+    // Update label
+    document.getElementById('stageLabel').textContent =
+        `${STAGES[currentStage].icon} ${STAGES[currentStage].label}`;
+
+    // Update pips
+    for (let i = 0; i < STAGES.length; i++) {
+        const pip = document.getElementById(`pip-${i}`);
+        if (!pip) continue;
+        pip.className = 'step-pip';
+        if (i < currentStage) pip.classList.add('done');
+        else if (i === currentStage) pip.classList.add('active');
+    }
+
+    currentStage++;
+    if (currentStage < STAGES.length) {
+        stageTimer = setTimeout(advanceStage, 2500 + Math.random() * 2000);
+    }
+}
+
+// ═══════════════════════════════════════════
+// DEMO REPORT (for preview)
+// ═══════════════════════════════════════════
+function showDemoReport() {
+    const reportEl = document.getElementById('p-report');
+    reportEl.innerHTML = `
+        <div class="report-section">
+            <div class="card">
+                <span class="report-badge badge-domain">BUSINESS STRATEGY</span>
+                <span class="report-badge badge-expert" style="margin-left: 6px;">Бизнес-консультант</span>
+                <h3 style="margin-top: 12px; font-size: 17px;">📌 Executive Summary</h3>
+                <p style="margin-top: 8px; font-size: 14px; color: var(--text2); line-height: 1.6;">
+                    Обсуждалась стратегия выхода на рынок B2B SaaS. Определены три ключевых
+                    направления: партнёрская программа, контент-маркетинг и Product Hunt запуск.
+                </p>
+            </div>
+        </div>
+
+        <div class="report-section">
+            <div class="card">
+                <h3 style="font-size: 15px;">📊 SWOT-анализ</h3>
+                <div class="swot-grid" style="margin-top: 12px;">
+                    <div class="swot-cell swot-s">
+                        <div class="swot-label" style="color: var(--success);">💪 Сильные</div>
+                        Уникальный продукт, сильная техническая команда
+                    </div>
+                    <div class="swot-cell swot-w">
+                        <div class="swot-label" style="color: var(--danger);">⚠️ Слабые</div>
+                        Нет чёткого позиционирования для B2B сегмента
+                    </div>
+                    <div class="swot-cell swot-o">
+                        <div class="swot-label" style="color: #3b82f6;">🚀 Возможности</div>
+                        Растущий рынок AI-автоматизации
+                    </div>
+                    <div class="swot-cell swot-t">
+                        <div class="swot-label" style="color: var(--warning);">🔥 Угрозы</div>
+                        Сильная конкуренция: Zapier, Make
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="report-section">
+            <div class="card">
+                <h3 style="font-size: 15px;">💡 Рекомендации эксперта</h3>
+                <div style="margin-top: 12px;">
+                    <div style="padding: 10px 12px; background: rgba(124,58,237,0.08); border-radius: 10px; margin-bottom: 8px; font-size: 14px;">
+                        <b style="color: var(--danger);">[HIGH]</b> Разработать Plan B для партнёрской программы
+                    </div>
+                    <div style="padding: 10px 12px; background: rgba(124,58,237,0.08); border-radius: 10px; font-size: 14px;">
+                        <b style="color: var(--warning);">[MED]</b> Определить KPI до запуска
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    switchTab('report');
+}
+</script>
+</body>
+</html>
