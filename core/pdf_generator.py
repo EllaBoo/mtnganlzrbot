@@ -36,24 +36,48 @@ def register_fonts() -> str:
 
 def generate_pdf_report(
     text: Optional[str] = None,
-    analysis: Optional[dict] = None,
+    analysis=None,
     language: str = "ru",
     output_path: Optional[Union[str, Path]] = None,
-    diagnostics: Optional[dict] = None,
+    diagnostics=None,
     transcript: Optional[str] = None,
     duration: Optional[float] = None,
     speakers_count: Optional[int] = None,
-    expertise: Optional[str] = None
+    expertise=None
 ) -> Path:
-    """Generate PDF report with transcription and analysis."""
+    """Generate PDF report with transcription and analysis.
+    
+    Args:
+        text: Transcript text (or use 'transcript' param).
+        analysis: Analysis result — dict with keys (summary, key_points, etc.) or plain str.
+        language: Language code for PDF titles.
+        output_path: Where to save the PDF (str or Path). Auto-generated if None.
+        diagnostics: Diagnostics result — dict with keys (diagnosis, confidence, etc.) or plain str.
+        transcript: Alias for 'text' parameter.
+        duration: Recording duration in seconds.
+        speakers_count: Number of speakers detected.
+        expertise: Expertise info — str description or dict with expert_role, domain, etc.
+    """
     
     # Support both 'text' and 'transcript' parameter names
     if text is None and transcript is not None:
         text = transcript
     if text is None:
         text = ""
+    
+    # Normalize analysis: accept str or dict
     if analysis is None:
         analysis = {}
+    elif isinstance(analysis, str):
+        analysis = {"summary": analysis}
+    
+    # Normalize diagnostics: accept str or dict
+    if isinstance(diagnostics, str):
+        diagnostics = {"diagnosis": diagnostics}
+    
+    # Normalize expertise: accept str or dict, extract display string
+    if isinstance(expertise, dict):
+        expertise = expertise.get("expert_role", str(expertise))
     
     if output_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
