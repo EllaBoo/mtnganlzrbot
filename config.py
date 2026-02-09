@@ -17,10 +17,6 @@ DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
-# Optional
-REDIS_URL = os.getenv("REDIS_URL")
-WEBAPP_URL = os.getenv("WEBAPP_URL")
-
 # Paths
 BASE_DIR = Path(__file__).parent
 FONTS_DIR = BASE_DIR / "fonts"
