@@ -2,7 +2,7 @@
 Digital Smarty v4.0 - PDF Report Generator
 """
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -35,17 +35,31 @@ def register_fonts() -> str:
 
 
 def generate_pdf_report(
-    text: str,
-    analysis: dict,
+    text: Optional[str] = None,
+    analysis: Optional[dict] = None,
     language: str = "ru",
-    output_path: Optional[Path] = None,
-    diagnostics: Optional[dict] = None
+    output_path: Optional[Union[str, Path]] = None,
+    diagnostics: Optional[dict] = None,
+    transcript: Optional[str] = None,
+    duration: Optional[float] = None,
+    speakers_count: Optional[int] = None,
+    expertise: Optional[str] = None
 ) -> Path:
     """Generate PDF report with transcription and analysis."""
+    
+    # Support both 'text' and 'transcript' parameter names
+    if text is None and transcript is not None:
+        text = transcript
+    if text is None:
+        text = ""
+    if analysis is None:
+        analysis = {}
     
     if output_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = config.TMP_DIR / f"report_{timestamp}.pdf"
+    else:
+        output_path = Path(output_path)
     
     font_name = register_fonts()
     
@@ -188,11 +202,26 @@ def generate_pdf_report(
         }
         labels = stat_labels.get(language, stat_labels["en"])
         
+        # Use passed duration if available, otherwise fall back to stats
+        duration_val = duration if duration is not None else stats.get("duration", "N/A")
+        if isinstance(duration_val, (int, float)):
+            minutes = int(duration_val // 60)
+            seconds = int(duration_val % 60)
+            duration_val = f"{minutes}:{seconds:02d}"
+        
         table_data = [
             [labels[0], str(stats.get("word_count", "N/A"))],
             [labels[1], str(stats.get("sentence_count", "N/A"))],
-            [labels[2], stats.get("duration", "N/A")],
+            [labels[2], str(duration_val)],
         ]
+        
+        if speakers_count is not None:
+            speakers_label = {"ru": "Спикеров", "en": "Speakers", "es": "Hablantes"}
+            table_data.append([speakers_label.get(language, speakers_label["en"]), str(speakers_count)])
+        
+        if expertise is not None:
+            expertise_label = {"ru": "Экспертиза", "en": "Expertise", "es": "Experiencia"}
+            table_data.append([expertise_label.get(language, expertise_label["en"]), str(expertise)])
         
         table = Table(table_data, colWidths=[80*mm, 60*mm])
         table.setStyle(TableStyle([

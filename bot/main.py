@@ -389,7 +389,7 @@ async def process_media(client: Client, status_message: Message, media_message: 
         pdf_filename = "".join(c if c.isalnum() or c in "._- " else "_" for c in pdf_filename)
         pdf_path = config.TMP_DIR / pdf_filename
         
-        await generate_pdf_report(
+        generate_pdf_report(
             output_path=str(pdf_path),
             analysis=analysis,
             diagnostics=diagnostics,
