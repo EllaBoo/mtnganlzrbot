@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  bot:
+    build: .
+    container_name: digital_smarty_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./fonts:/app/fonts:ro
+      - bot_sessions:/app/sessions
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:
+  bot_sessions:
