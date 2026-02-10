@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
 """
 🧠 Digital Smarty v5.0 — Цифровой Умник
-Telegram Bot + Mini App Hybrid
+Telegram Bot + Pyrogram for large file downloads (up to 2GB)
 Built on Dronor Expert Architecture
 
-Каждый шаг обработки = вызов Dronor эксперта через API:
-  1. ds_url_resolver      → определить источник
-  2. ds_audio_extractor   → извлечь аудио
-  3. ds_transcriber       → транскрибировать
-  4. ds_topic_extractor   → извлечь темы
-  5. ds_expert_analyzer   → экспертный анализ
-  6. ds_report_generator  → сгенерировать отчёт
-  7. ds_context_manager   → сохранить контекст
+Pipeline: URL/File → Audio → Transcribe → Topics → Expert → Report
 """
 import asyncio
 import logging
@@ -31,6 +24,8 @@ from telegram.ext import (
 )
 from telegram.constants import ChatAction, ParseMode
 
+from pyrogram import Client as PyroClient
+
 from config import config
 from dronor_client import DronorClient
 
@@ -42,6 +37,58 @@ logger = logging.getLogger("smarty")
 
 # Dronor Expert Client
 dronor = DronorClient(config.DRONOR_API)
+
+# Pyrogram client for large file downloads (MTProto, no 20MB limit)
+pyro_client = None
+
+
+async def init_pyrogram(app: Application):
+    """Initialize Pyrogram client on bot startup"""
+    global pyro_client
+    if config.API_ID and config.API_HASH:
+        pyro_client = PyroClient(
+            "smarty_downloader",
+            api_id=config.API_ID,
+            api_hash=config.API_HASH,
+            bot_token=config.BOT_TOKEN,
+            no_updates=True,
+            in_memory=True,
+        )
+        await pyro_client.start()
+        logger.info("✅ Pyrogram client started (large file support enabled)")
+    else:
+        logger.warning("⚠️ No API_ID/API_HASH — large file downloads disabled (max 20MB)")
+
+
+async def shutdown_pyrogram(app: Application):
+    """Stop Pyrogram client on bot shutdown"""
+    global pyro_client
+    if pyro_client:
+        await pyro_client.stop()
+        logger.info("Pyrogram client stopped")
+
+
+async def download_file(file_id: str, dest_path: str, update: Update) -> bool:
+    """
+    Download file from Telegram.
+    Uses Pyrogram (MTProto) for large files, falls back to Bot API for small ones.
+    """
+    try:
+        if pyro_client:
+            # Pyrogram: supports up to 2GB
+            await pyro_client.download_media(
+                file_id,
+                file_name=dest_path
+            )
+            return True
+        else:
+            # Fallback: Bot API (max 20MB)
+            file = await update.get_bot().get_file(file_id)
+            await file.download_to_drive(dest_path)
+            return True
+    except Exception as e:
+        logger.error(f"Download failed: {e}")
+        return False
 
 
 # ══════════════════════════════════════════════════════════
@@ -89,6 +136,8 @@ MSGS = {
     "error": "😅 Упс, что-то пошло не так. Попробуй ещё раз!",
     "no_audio": "🤔 Не смог разобрать речь. Возможно, качество записи низкое.",
     "bad_url": "❌ Не удалось извлечь аудио. Проверь ссылку — она публичная?",
+    "too_big": "📦 Файл слишком большой (макс. {max_mb} MB).",
+    "download_fail": "❌ Не удалось скачать файл. Попробуй отправить ещё раз.",
     "unsupported": (
         "🤔 Отправь мне:\n"
         "• 🎤 Голосовое сообщение\n"
@@ -165,7 +214,6 @@ async def update_stage(msg, stage_idx: int):
     """Update progress message with current stage"""
     stages = MSGS["stages"]
     if stage_idx < len(stages):
-        # Build progress bar
         dots = ""
         for i in range(len(stages)):
             if i < stage_idx:
@@ -299,13 +347,19 @@ async def process_content(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
             f"{MSGS['error']}\n\n<code>{str(e)[:300]}</code>",
             parse_mode=ParseMode.HTML
         )
+    finally:
+        # Cleanup temp file
+        if file_path and os.path.exists(file_path):
+            try:
+                os.unlink(file_path)
+            except Exception:
+                pass
 
 
 def build_summary(topic_data: dict, expert_data: dict, word_count: int) -> str:
     """Build concise summary message from expert results"""
     lines = []
 
-    # Header
     domain = "General"
     meeting_type = ""
     if isinstance(topic_data, dict):
@@ -324,14 +378,12 @@ def build_summary(topic_data: dict, expert_data: dict, word_count: int) -> str:
     lines.append(f"📝 Слов: {word_count:,}")
     lines.append("")
 
-    # Executive summary
     if isinstance(topic_data, dict):
         summary = topic_data.get("executive_summary", "")
         if summary:
             lines.append(f"📌 {summary}")
             lines.append("")
 
-    # Topics
     if isinstance(topic_data, dict):
         topics = topic_data.get("topics", [])
         if topics:
@@ -341,7 +393,6 @@ def build_summary(topic_data: dict, expert_data: dict, word_count: int) -> str:
                 lines.append(f"  {i}. {name}")
             lines.append("")
 
-    # Decisions
     if isinstance(topic_data, dict):
         decisions = topic_data.get("decisions", [])
         if decisions:
@@ -351,7 +402,6 @@ def build_summary(topic_data: dict, expert_data: dict, word_count: int) -> str:
                 lines.append(f"  • {txt}")
             lines.append("")
 
-    # Action items
     if isinstance(topic_data, dict):
         actions = topic_data.get("action_items", [])
         if actions:
@@ -371,7 +421,6 @@ def build_summary(topic_data: dict, expert_data: dict, word_count: int) -> str:
                     lines.append(f"  • {a}")
             lines.append("")
 
-    # SWOT preview
     if isinstance(expert_data, dict):
         assess = expert_data.get("assessment", {})
         if isinstance(assess, dict):
@@ -387,7 +436,6 @@ def build_summary(topic_data: dict, expert_data: dict, word_count: int) -> str:
                     lines.append(f"  ⚠️ {w[:80]}")
                 lines.append("")
 
-    # Top recommendation
     if isinstance(expert_data, dict):
         recs = expert_data.get("recommendations", [])
         if recs:
@@ -407,7 +455,6 @@ def build_summary(topic_data: dict, expert_data: dict, word_count: int) -> str:
 # ══════════════════════════════════════════════════════════
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    # Load user context from Dronor
     user_id = str(update.effective_user.id)
     history = dronor.load_context(user_id)
     if isinstance(history.get("result"), dict):
@@ -436,11 +483,15 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not voice:
         return
 
-    file = await voice.get_file()
     ext = ".ogg" if update.message.voice else ".mp3"
-    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-        await file.download_to_drive(tmp.name)
-        await process_content(update, ctx, file_path=tmp.name)
+    tmp_path = tempfile.mktemp(suffix=ext)
+
+    ok = await download_file(voice.file_id, tmp_path, update)
+    if not ok:
+        await update.message.reply_text(MSGS["download_fail"])
+        return
+
+    await process_content(update, ctx, file_path=tmp_path)
 
 
 async def handle_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -449,31 +500,56 @@ async def handle_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not video:
         return
 
-    file = await video.get_file()
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-        await file.download_to_drive(tmp.name)
-        await process_content(update, ctx, file_path=tmp.name)
+    tmp_path = tempfile.mktemp(suffix=".mp4")
+
+    ok = await download_file(video.file_id, tmp_path, update)
+    if not ok:
+        await update.message.reply_text(MSGS["download_fail"])
+        return
+
+    await process_content(update, ctx, file_path=tmp_path)
 
 
 async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Audio/video file uploads"""
+    """Audio/video file uploads — supports up to 2GB via Pyrogram"""
     doc = update.message.document
     if not doc:
         return
 
     mime = doc.mime_type or ""
-    supported = ("audio", "video", "ogg", "mp4", "mp3", "wav", "m4a", "webm", "mpeg")
-    if not any(t in mime for t in supported):
+    fname = (doc.file_name or "").lower()
+    supported_mime = ("audio", "video", "ogg", "mp4", "mp3", "wav", "m4a", "webm", "mpeg", "flac", "aac")
+    supported_ext = (".mp3", ".mp4", ".m4a", ".ogg", ".wav", ".webm", ".flac", ".aac",
+                     ".mov", ".avi", ".mkv", ".wma", ".opus", ".oga")
+
+    is_supported = any(t in mime for t in supported_mime) or any(fname.endswith(e) for e in supported_ext)
+
+    if not is_supported:
         await update.message.reply_text(
             "🤔 Отправь аудио или видео файл — документы пока не поддерживаю."
         )
         return
 
-    file = await doc.get_file()
+    # Check file size
+    file_size_mb = (doc.file_size or 0) / (1024 * 1024)
+    if file_size_mb > config.MAX_FILE_MB:
+        await update.message.reply_text(
+            MSGS["too_big"].format(max_mb=config.MAX_FILE_MB)
+        )
+        return
+
+    logger.info(f"📥 Downloading document: {doc.file_name} ({file_size_mb:.1f} MB)")
+
     ext = os.path.splitext(doc.file_name or "file.mp4")[1] or ".mp4"
-    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-        await file.download_to_drive(tmp.name)
-        await process_content(update, ctx, file_path=tmp.name)
+    tmp_path = tempfile.mktemp(suffix=ext)
+
+    ok = await download_file(doc.file_id, tmp_path, update)
+    if not ok:
+        await update.message.reply_text(MSGS["download_fail"])
+        return
+
+    logger.info(f"✅ Downloaded to {tmp_path} ({os.path.getsize(tmp_path) / 1024 / 1024:.1f} MB)")
+    await process_content(update, ctx, file_path=tmp_path)
 
 
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -502,12 +578,10 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     data = q.data
 
-    # ── Format selection ──
     if data.startswith("fmt:"):
         fmt = data.split(":")[1]
         ctx.user_data["format"] = fmt
 
-        # Re-generate report if we have cached data
         last_trans = ctx.user_data.get("last_transcription")
         last_topic = ctx.user_data.get("last_topic_json")
         last_expert = ctx.user_data.get("last_expert_json")
@@ -532,7 +606,6 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.message.edit_text(f"✅ Формат: <b>{fmt}</b>. Отправь контент для анализа.",
                                       parse_mode=ParseMode.HTML)
 
-    # ── Settings ──
     elif data == "settings":
         await q.message.edit_text(
             "⚙️ <b>Настройки Цифрового Умника</b>",
@@ -563,7 +636,6 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb_formats()
         )
 
-    # ── History ──
     elif data == "history":
         user_id = str(q.from_user.id)
         history = dronor.get_user_history(user_id)
@@ -586,17 +658,32 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             await q.message.edit_text("📋 Пока нет анализов. Отправь контент!")
 
-    # ── Help ──
     elif data == "help":
         await q.message.reply_text(MSGS["help"], parse_mode=ParseMode.HTML)
 
-    # ── Back ──
     elif data == "back":
         await q.message.edit_text(
             "🧠 <b>Цифровой Умник</b> — готов к работе!",
             parse_mode=ParseMode.HTML,
             reply_markup=kb_main()
         )
+
+
+# ══════════════════════════════════════════════════════════
+# ERROR HANDLER
+# ══════════════════════════════════════════════════════════
+
+async def error_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Global error handler"""
+    logger.error(f"Update {update} caused error: {ctx.error}", exc_info=ctx.error)
+    if update and update.message:
+        try:
+            await update.message.reply_text(
+                f"{MSGS['error']}\n\n<code>{str(ctx.error)[:200]}</code>",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════════════════
@@ -609,6 +696,10 @@ def main():
         return
 
     app = Application.builder().token(config.BOT_TOKEN).build()
+
+    # Lifecycle hooks for Pyrogram
+    app.post_init = init_pyrogram
+    app.post_shutdown = shutdown_pyrogram
 
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
@@ -623,8 +714,12 @@ def main():
     # Callbacks
     app.add_handler(CallbackQueryHandler(handle_callback))
 
+    # Error handler
+    app.add_error_handler(error_handler)
+
     logger.info("🧠 Цифровой Умник v5.0 запущен!")
     logger.info(f"   Dronor API: {config.DRONOR_API}")
+    logger.info(f"   Pyrogram: {'enabled' if config.API_ID else 'disabled'}")
     logger.info(f"   Mini App: {config.WEBAPP_URL or 'disabled'}")
 
     app.run_polling(drop_pending_updates=True)
