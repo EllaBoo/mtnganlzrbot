@@ -12,18 +12,20 @@ import json
 import subprocess
 import tempfile
 import httpx
+from datetime import datetime
 from openai import AsyncOpenAI
 
-from telegram import Update, InputFile
+from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    filters, ContextTypes
+    CallbackQueryHandler, filters, ContextTypes
 )
 from telegram.constants import ChatAction, ParseMode
 
 from pyrogram import Client as PyroClient
 
 from config import config
+from report_generator import generate_pdf_report, generate_html_report, safe_filename
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,6 +35,108 @@ logger = logging.getLogger("bot")
 
 pyro_client = None
 openai_client = None
+
+# ==========================================
+# ТЁПЛЫЕ СООБЩЕНИЯ
+# ==========================================
+BOT_MESSAGES = {
+    "ru": {
+        "file_received": "💪 Тащу файл...",
+        "extracting": "🎵 Извлекаю аудио...",
+        "transcribing": "🎧 Слушаю внимательно...",
+        "analyzing": "🧠 Повезло, я как раз в этом профи...",
+        "generating": "✨ Собираю мысли...",
+        "done": "🎁 Вуаля! Ваш отчёт готов",
+        "error": "😅 Упс, что-то пошло не так",
+        "language_prompt": "🌍 На каком языке хотите получить результат?",
+        "language_selected": "👍 Отлично! Готовлю отчёт",
+        "no_speech": "🤔 Не удалось разобрать речь",
+        "audio_failed": "❌ Не удалось извлечь аудио",
+        "download_failed": "❌ Не удалось скачать",
+        "yt_downloading": "📥 Скачиваю с YouTube...",
+        "yt_done": "✅ Скачано!",
+    },
+    "en": {
+        "file_received": "💪 Grabbing the file...",
+        "extracting": "🎵 Extracting audio...",
+        "transcribing": "🎧 Listening carefully...",
+        "analyzing": "🧠 Lucky you, I'm a pro at this...",
+        "generating": "✨ Gathering my thoughts...",
+        "done": "🎁 Voilà! Your report is ready",
+        "error": "😅 Oops, something went wrong",
+        "language_prompt": "🌍 What language would you like the result in?",
+        "language_selected": "👍 Great! Preparing your report",
+        "no_speech": "🤔 Couldn't recognize speech",
+        "audio_failed": "❌ Failed to extract audio",
+        "download_failed": "❌ Failed to download",
+        "yt_downloading": "📥 Downloading from YouTube...",
+        "yt_done": "✅ Downloaded!",
+    },
+    "kk": {
+        "file_received": "💪 Файлды алып жатырмын...",
+        "extracting": "🎵 Аудио шығарып жатырмын...",
+        "transcribing": "🎧 Мұқият тыңдап жатырмын...",
+        "analyzing": "🧠 Сәттілік, мен бұл салада маманмын...",
+        "generating": "✨ Ойларымды жинап жатырмын...",
+        "done": "🎁 Міне! Есебіңіз дайын",
+        "error": "😅 Қап, бірдеңе дұрыс болмады",
+        "language_prompt": "🌍 Нәтижені қай тілде алғыңыз келеді?",
+        "language_selected": "👍 Тамаша! Есеп дайындап жатырмын",
+        "no_speech": "🤔 Сөйлеуді анықтай алмадым",
+        "audio_failed": "❌ Аудио шығара алмадым",
+        "download_failed": "❌ Жүктей алмадым",
+        "yt_downloading": "📥 YouTube-тен жүктеп жатырмын...",
+        "yt_done": "✅ Жүктелді!",
+    },
+    "es": {
+        "file_received": "💪 Tomando el archivo...",
+        "extracting": "🎵 Extrayendo audio...",
+        "transcribing": "🎧 Escuchando atentamente...",
+        "analyzing": "🧠 Qué suerte, soy experto en esto...",
+        "generating": "✨ Organizando mis ideas...",
+        "done": "🎁 ¡Voilà! Tu informe está listo",
+        "error": "😅 Ups, algo salió mal",
+        "language_prompt": "🌍 ¿En qué idioma quieres el resultado?",
+        "language_selected": "👍 ¡Genial! Preparando tu informe",
+        "no_speech": "🤔 No pude reconocer el habla",
+        "audio_failed": "❌ No se pudo extraer el audio",
+        "download_failed": "❌ No se pudo descargar",
+        "yt_downloading": "📥 Descargando de YouTube...",
+        "yt_done": "✅ ¡Descargado!",
+    },
+}
+
+# Язык → код для Deepgram
+LANG_TO_DEEPGRAM = {
+    "ru": "ru",
+    "en": "en",
+    "kk": "kk",
+    "es": "es",
+    "auto": "ru",  # fallback
+}
+
+
+def get_msg(lang: str, key: str) -> str:
+    """Получить сообщение на нужном языке"""
+    return BOT_MESSAGES.get(lang, BOT_MESSAGES["ru"]).get(key, BOT_MESSAGES["ru"].get(key, key))
+
+
+def get_language_keyboard() -> InlineKeyboardMarkup:
+    """Создать клавиатуру выбора языка"""
+    keyboard = [
+        [
+            InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_ru"),
+            InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
+        ],
+        [
+            InlineKeyboardButton("🇰🇿 Қазақша", callback_data="lang_kk"),
+            InlineKeyboardButton("🇪🇸 Español", callback_data="lang_es"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Язык оригинала", callback_data="lang_auto"),
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 
 async def on_startup(app: Application):
@@ -97,14 +201,22 @@ def extract_audio(input_path: str):
 async def transcribe_audio(audio_path: str, lang: str = "ru"):
     if not config.DEEPGRAM_API_KEY:
         logger.error("No DEEPGRAM_API_KEY!")
-        return None
+        return None, None
     url = "https://api.deepgram.com/v1/listen"
+    
+    # Для auto - сначала пробуем определить язык
+    deepgram_lang = LANG_TO_DEEPGRAM.get(lang, "ru")
+    if lang == "auto":
+        # Deepgram detect_language
+        deepgram_lang = "ru"  # fallback, Deepgram сам определит
+    
     params = {
         "model": "nova-2",
-        "language": lang if lang != "auto" else "ru",
+        "language": deepgram_lang,
         "smart_format": "true",
         "punctuate": "true",
         "paragraphs": "true",
+        "detect_language": "true" if lang == "auto" else "false",
     }
     try:
         file_size = os.path.getsize(audio_path)
@@ -121,14 +233,21 @@ async def transcribe_audio(audio_path: str, lang: str = "ru"):
                 )
         if resp.status_code != 200:
             logger.error(f"Deepgram {resp.status_code}: {resp.text[:300]}")
-            return None
+            return None, None
         data = resp.json()
+        
+        # Определяем язык
+        detected_lang = lang
+        if lang == "auto":
+            detected = data.get("results", {}).get("channels", [{}])[0].get("detected_language", "ru")
+            detected_lang = detected if detected in BOT_MESSAGES else "ru"
+        
         channels = data.get("results", {}).get("channels", [])
         if not channels:
-            return None
+            return None, detected_lang
         alternatives = channels[0].get("alternatives", [])
         if not alternatives:
-            return None
+            return None, detected_lang
         paragraphs = alternatives[0].get("paragraphs", {})
         if paragraphs and paragraphs.get("paragraphs"):
             parts = []
@@ -140,56 +259,116 @@ async def transcribe_audio(audio_path: str, lang: str = "ru"):
         else:
             text = alternatives[0].get("transcript", "")
         logger.info(f"Transcribed: {len(text)} chars, {len(text.split())} words")
-        return text
+        return text, detected_lang
     except Exception as e:
         logger.error(f"Deepgram error: {e}")
-        return None
+        return None, None
 
 
-ANALYSIS_PROMPT = """Ты — экспертный аналитик. Проанализируй транскрипцию и дай структурированный анализ.
+# Промпт для структурированного JSON-анализа
+ANALYSIS_PROMPT_JSON = """Ты — экспертный аналитик. Проанализируй транскрипцию и верни ТОЛЬКО валидный JSON.
 
-Определи область и адаптируй анализ.
+Язык ответа: {lang_name}
 
-Формат:
+Структура JSON:
+{
+  "title": "Краткое название встречи",
+  "executive_summary": "2-3 предложения о сути встречи",
+  "context": {
+    "industry": "Сфера/индустрия",
+    "meeting_type": "Тип встречи",
+    "complexity": "Низкий/Средний/Высокий"
+  },
+  "goals": {
+    "explicit": ["явная цель 1", "явная цель 2"],
+    "hidden": ["скрытая цель 1"]
+  },
+  "key_topics": [
+    {"topic": "Тема 1", "details": "Подробности"},
+    {"topic": "Тема 2", "details": "Подробности"}
+  ],
+  "positions": {
+    "side_a": {"label": "Сторона А", "position": "Позиция", "interests": "Интересы"},
+    "side_b": {"label": "Сторона Б", "position": "Позиция", "interests": "Интересы"}
+  },
+  "agreement_points": ["точка согласия 1"],
+  "disagreement_points": ["точка расхождения 1"],
+  "decisions": ["решение 1", "решение 2"],
+  "action_items": [
+    {"task": "Задача", "responsible": "Кто", "deadline": "Когда"}
+  ],
+  "swot": {
+    "strengths": ["сильная сторона"],
+    "weaknesses": ["слабая сторона"],
+    "opportunities": ["возможность"],
+    "threats": ["угроза"]
+  },
+  "recommendations": {
+    "substance": ["рекомендация по существу"],
+    "methodology": ["методологическая рекомендация"]
+  },
+  "risks": [
+    {"risk": "Риск", "severity": "Высокая/Средняя/Низкая", "mitigation": "Как снизить"}
+  ],
+  "open_questions": ["вопрос 1"],
+  "action_plan": {
+    "urgent": ["срочно 1-7 дней"],
+    "medium": ["среднесрок 1-4 недели"],
+    "long_term": ["долгосрок 1-3 месяца"]
+  },
+  "kpi": ["KPI 1"],
+  "hidden_dynamics": ["скрытая динамика"],
+  "conclusion": {
+    "main_insight": "Главный инсайт",
+    "key_recommendation": "Ключевая рекомендация",
+    "forecast": "Прогноз"
+  }
+}
 
-📋 КРАТКОЕ СОДЕРЖАНИЕ
-(2-3 предложения)
+Верни ТОЛЬКО JSON, без markdown, без ```json, без пояснений."""
 
-📑 ОСНОВНЫЕ ТЕМЫ
-(пронумерованный список)
-
-📌 КЛЮЧЕВЫЕ РЕШЕНИЯ И ФАКТЫ
-(только факты из записи)
-
-✅ ACTION ITEMS
-(задачи: что → кто → когда)
-
-💡 РЕКОМЕНДАЦИИ
-(экспертные рекомендации)
-
-❓ ОТКРЫТЫЕ ВОПРОСЫ
-(что осталось нерешённым)
-
-Пиши на языке транскрипции. Будь конкретным."""
+LANG_NAMES = {
+    "ru": "русский",
+    "en": "English",
+    "kk": "қазақ тілі",
+    "es": "español",
+}
 
 
-async def analyze_text(text: str):
+async def analyze_text_json(text: str, lang: str = "ru") -> dict:
+    """Анализ текста с возвратом структурированного JSON"""
     if not openai_client:
         return None
     max_chars = 100_000
     if len(text) > max_chars:
         text = text[:max_chars] + "\n\n[...текст обрезан...]"
+    
+    lang_name = LANG_NAMES.get(lang, "русский")
+    prompt = ANALYSIS_PROMPT_JSON.format(lang_name=lang_name)
+    
     try:
         resp = await openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": ANALYSIS_PROMPT},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": f"Транскрипция:\n\n{text}"},
             ],
             temperature=0.3,
             max_tokens=4000,
         )
-        return resp.choices[0].message.content
+        content = resp.choices[0].message.content
+        # Убираем возможные markdown-обёртки
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        
+        return json.loads(content)
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parse error: {e}")
+        return None
     except Exception as e:
         logger.error(f"OpenAI error: {e}")
         return None
@@ -197,63 +376,112 @@ async def analyze_text(text: str):
 
 async def process_content(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                           file_path: str):
+    """Обработка контента после выбора языка"""
     chat = update.effective_chat
-    msg = await update.message.reply_text("⏳ Начинаю обработку...")
+    lang = ctx.user_data.get("output_language", "ru")
+    
+    msg = await update.message.reply_text(get_msg(lang, "file_received"))
     audio_path = None
     try:
-        await msg.edit_text("🎵 Извлекаю аудио...")
+        await msg.edit_text(get_msg(lang, "extracting"))
         await chat.send_action(ChatAction.TYPING)
         audio_path = await asyncio.get_event_loop().run_in_executor(
             None, extract_audio, file_path
         )
         if not audio_path:
-            await msg.edit_text("❌ Не удалось извлечь аудио.")
+            await msg.edit_text(get_msg(lang, "audio_failed"))
             return
 
-        await msg.edit_text("📝 Транскрибирую (Deepgram Nova-2)...")
+        await msg.edit_text(get_msg(lang, "transcribing"))
         await chat.send_action(ChatAction.TYPING)
-        lang = ctx.user_data.get("language", config.DEFAULT_LANG)
-        text = await transcribe_audio(audio_path, lang)
+        
+        text, detected_lang = await transcribe_audio(audio_path, lang)
+        
+        # Если auto — используем определённый язык
+        if lang == "auto" and detected_lang:
+            lang = detected_lang
+            ctx.user_data["output_language"] = lang
+        
         if not text or len(text) < 20:
-            await msg.edit_text("🤔 Не удалось разобрать речь.")
+            await msg.edit_text(get_msg(lang, "no_speech"))
             return
 
         word_count = len(text.split())
-        await msg.edit_text(f"🧠 Анализирую ({word_count:,} слов)...")
+        await msg.edit_text(get_msg(lang, "analyzing"))
         await chat.send_action(ChatAction.TYPING)
-        analysis = await analyze_text(text)
+        
+        # Получаем структурированный анализ
+        analysis = await analyze_text_json(text, lang)
+        
+        if not analysis:
+            # Fallback — отправляем просто текст
+            await msg.edit_text(f"🧠 Анализ завершён\n📝 Слов: {word_count:,}")
+            trans_file = tempfile.mktemp(suffix=".txt")
+            with open(trans_file, "w", encoding="utf-8") as f:
+                f.write(f"=== Транскрипция ({word_count} слов) ===\n\n{text}")
+            with open(trans_file, "rb") as f:
+                await update.message.reply_document(
+                    InputFile(f, filename="transcript.txt"),
+                    caption=f"📄 Транскрипция ({word_count:,} слов)"
+                )
+            os.unlink(trans_file)
+            return
 
-        header = f"🧠 <b>Анализ завершён</b>\n📝 Слов: {word_count:,}\n"
-        if analysis:
-            full_msg = header + "\n" + analysis
-            if len(full_msg) <= 4096:
-                await msg.edit_text(full_msg, parse_mode=ParseMode.HTML)
-            else:
-                await msg.edit_text(header, parse_mode=ParseMode.HTML)
-                for i in range(0, len(analysis), 4000):
-                    await update.message.reply_text(analysis[i:i + 4000])
-        else:
-            await msg.edit_text(
-                header + "\n⚠️ Анализ недоступен, транскрипция в файле ниже.",
-                parse_mode=ParseMode.HTML
-            )
+        await msg.edit_text(get_msg(lang, "generating"))
+        await chat.send_action(ChatAction.UPLOAD_DOCUMENT)
 
+        # Генерируем название файла
+        title = analysis.get("title", "Анализ встречи")
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        base_filename = f"{safe_filename(title)}_{date_str}"
+
+        # 1. Транскрипт TXT
         trans_file = tempfile.mktemp(suffix=".txt")
         with open(trans_file, "w", encoding="utf-8") as f:
             f.write(f"=== Транскрипция ({word_count} слов) ===\n\n{text}")
-            if analysis:
-                f.write(f"\n\n=== Анализ ===\n\n{analysis}")
+
+        # 2. PDF отчёт
+        pdf_path = generate_pdf_report(analysis, lang)
+
+        # 3. HTML артефакт
+        html_content = generate_html_report(analysis, lang)
+        html_path = tempfile.mktemp(suffix=".html")
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+
+        # Отправляем всё
+        await msg.edit_text(get_msg(lang, "done"))
+
+        # Отправляем PDF
+        with open(pdf_path, "rb") as f:
+            await update.message.reply_document(
+                InputFile(f, filename=f"{base_filename}.pdf"),
+                caption="📊 Экспертный отчёт (PDF)"
+            )
+
+        # Отправляем HTML
+        with open(html_path, "rb") as f:
+            await update.message.reply_document(
+                InputFile(f, filename=f"{base_filename}.html"),
+                caption="🌐 Интерактивный отчёт (HTML)"
+            )
+
+        # Отправляем транскрипт
         with open(trans_file, "rb") as f:
             await update.message.reply_document(
-                InputFile(f, filename="analysis.txt"),
-                caption=f"📄 Полный текст ({word_count:,} слов)"
+                InputFile(f, filename="transcript.txt"),
+                caption=f"📝 Транскрипция ({word_count:,} слов)"
             )
-        os.unlink(trans_file)
+
+        # Cleanup
+        for p in [trans_file, pdf_path, html_path]:
+            if p and os.path.exists(p):
+                os.unlink(p)
 
     except Exception as e:
         logger.error(f"Pipeline error: {e}", exc_info=True)
         await msg.edit_text(
-            f"😅 Ошибка: <code>{str(e)[:300]}</code>",
+            f"{get_msg(lang, 'error')}: <code>{str(e)[:300]}</code>",
             parse_mode=ParseMode.HTML
         )
     finally:
@@ -265,15 +493,66 @@ async def process_content(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                     pass
 
 
+# ==========================================
+# ОБРАБОТЧИКИ ФАЙЛОВ — СНАЧАЛА СПРАШИВАЕМ ЯЗЫК
+# ==========================================
+
+async def save_file_and_ask_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE, 
+                                      file_id: str, file_ext: str):
+    """Сохраняем файл и спрашиваем язык"""
+    tmp = tempfile.mktemp(suffix=file_ext)
+    if not await download_file(file_id, tmp, update):
+        await update.message.reply_text("❌ Не удалось скачать файл")
+        return
+    
+    # Сохраняем путь к файлу
+    ctx.user_data["pending_file"] = tmp
+    
+    # Спрашиваем язык
+    await update.message.reply_text(
+        "🌍 На каком языке хотите получить результат?",
+        reply_markup=get_language_keyboard()
+    )
+
+
+async def handle_language_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора языка"""
+    query = update.callback_query
+    await query.answer()
+    
+    lang = query.data.replace("lang_", "")
+    ctx.user_data["output_language"] = lang
+    
+    # Убираем кнопки
+    await query.edit_message_reply_markup(reply_markup=None)
+    
+    # Получаем сохранённый файл
+    file_path = ctx.user_data.get("pending_file")
+    if not file_path or not os.path.exists(file_path):
+        await query.message.reply_text("❌ Файл не найден, отправьте заново")
+        return
+    
+    # Создаём fake update для process_content
+    # Нужно передать оригинальное сообщение
+    original_message = ctx.user_data.get("original_message")
+    if original_message:
+        update._effective_message = original_message
+    
+    await process_content(update, ctx, file_path)
+
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🧠 <b>Meeting Analyzer Bot</b>\n\n"
+        "🧠 <b>Цифровой Умник</b>\n\n"
         "Отправь мне:\n"
         "🎤 Голосовое сообщение\n"
         "🎵 Аудио файл\n"
         "🎬 Видео файл\n"
         "🔗 Ссылку на YouTube\n\n"
-        "Я транскрибирую и сделаю экспертный анализ.\n"
+        "Я транскрибирую, проанализирую и создам:\n"
+        "📄 PDF-отчёт\n"
+        "🌐 Интерактивный HTML\n"
+        "📝 Транскрипцию\n\n"
         "Файлы до 2 GB.",
         parse_mode=ParseMode.HTML
     )
@@ -283,9 +562,10 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 <b>Как использовать:</b>\n\n"
         "1. Отправь аудио/видео/голосовое\n"
-        "2. Deepgram транскрибирует\n"
-        "3. GPT-4o анализирует\n"
-        "4. Получаешь анализ + текст файлом\n\n"
+        "2. Выбери язык результата\n"
+        "3. Deepgram транскрибирует\n"
+        "4. GPT-4o анализирует\n"
+        "5. Получаешь PDF + HTML + TXT\n\n"
         "Файлы до 2 GB через Pyrogram.",
         parse_mode=ParseMode.HTML
     )
@@ -296,22 +576,16 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not voice:
         return
     ext = ".ogg" if update.message.voice else ".mp3"
-    tmp = tempfile.mktemp(suffix=ext)
-    if not await download_file(voice.file_id, tmp, update):
-        await update.message.reply_text("❌ Не удалось скачать.")
-        return
-    await process_content(update, ctx, file_path=tmp)
+    ctx.user_data["original_message"] = update.message
+    await save_file_and_ask_language(update, ctx, voice.file_id, ext)
 
 
 async def handle_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     video = update.message.video or update.message.video_note
     if not video:
         return
-    tmp = tempfile.mktemp(suffix=".mp4")
-    if not await download_file(video.file_id, tmp, update):
-        await update.message.reply_text("❌ Не удалось скачать.")
-        return
-    await process_content(update, ctx, file_path=tmp)
+    ctx.user_data["original_message"] = update.message
+    await save_file_and_ask_language(update, ctx, video.file_id, ".mp4")
 
 
 async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -334,12 +608,8 @@ async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     logger.info(f"Downloading: {doc.file_name} ({size_mb:.1f} MB)")
     ext = os.path.splitext(doc.file_name or "file.mp4")[1] or ".mp4"
-    tmp = tempfile.mktemp(suffix=ext)
-    if not await download_file(doc.file_id, tmp, update):
-        await update.message.reply_text("❌ Не удалось скачать.")
-        return
-    logger.info(f"Downloaded: {os.path.getsize(tmp) / 1024 / 1024:.1f} MB")
-    await process_content(update, ctx, file_path=tmp)
+    ctx.user_data["original_message"] = update.message
+    await save_file_and_ask_language(update, ctx, doc.file_id, ext)
 
 
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -358,7 +628,12 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             if r.returncode == 0 and os.path.exists(tmp):
                 await msg.edit_text("✅ Скачано!")
-                await process_content(update, ctx, file_path=tmp)
+                ctx.user_data["pending_file"] = tmp
+                ctx.user_data["original_message"] = update.message
+                await update.message.reply_text(
+                    "🌍 На каком языке хотите получить результат?",
+                    reply_markup=get_language_keyboard()
+                )
             else:
                 await msg.edit_text(f"❌ Ошибка YouTube:\n<code>{r.stderr[:200]}</code>",
                                     parse_mode=ParseMode.HTML)
@@ -383,6 +658,7 @@ def main():
     app.post_shutdown = on_shutdown
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CallbackQueryHandler(handle_language_callback, pattern="^lang_"))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.VIDEO | filters.VIDEO_NOTE, handle_video))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
