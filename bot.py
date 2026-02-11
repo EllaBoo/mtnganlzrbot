@@ -1,53 +1,45 @@
 #!/usr/bin/env python3
 """
-🧠 Digital Smarty v5.0 — Цифровой Умник
-Telegram Bot + Pyrogram for large file downloads (up to 2GB)
-Built on Dronor Expert Architecture
-
-Pipeline: URL/File → Audio → Transcribe → Topics → Expert → Report
+MTNGanlzrBot — Standalone Meeting Analyzer
+Audio/Video → Transcription → Expert Analysis
+Direct ffmpeg + Deepgram + OpenAI (no external services)
 """
 import asyncio
 import logging
 import os
 import re
 import json
+import subprocess
 import tempfile
-from datetime import datetime
+import httpx
+from openai import AsyncOpenAI
 
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    WebAppInfo, InputFile
-)
+from telegram import Update, InputFile
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    CallbackQueryHandler, filters, ContextTypes
+    filters, ContextTypes
 )
 from telegram.constants import ChatAction, ParseMode
 
 from pyrogram import Client as PyroClient
 
 from config import config
-from dronor_client import DronorClient
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s"
 )
-logger = logging.getLogger("smarty")
+logger = logging.getLogger("bot")
 
-# Dronor Expert Client
-dronor = DronorClient(config.DRONOR_API)
-
-# Pyrogram client for large file downloads (MTProto, no 20MB limit)
 pyro_client = None
+openai_client = None
 
 
-async def init_pyrogram(app: Application):
-    """Initialize Pyrogram client on bot startup"""
-    global pyro_client
+async def on_startup(app: Application):
+    global pyro_client, openai_client
     if config.API_ID and config.API_HASH:
         pyro_client = PyroClient(
-            "smarty_downloader",
+            "bot_downloader",
             api_id=config.API_ID,
             api_hash=config.API_HASH,
             bot_token=config.BOT_TOKEN,
@@ -55,673 +47,351 @@ async def init_pyrogram(app: Application):
             in_memory=True,
         )
         await pyro_client.start()
-        logger.info("✅ Pyrogram client started (large file support enabled)")
+        logger.info("Pyrogram started (large file support)")
     else:
-        logger.warning("⚠️ No API_ID/API_HASH — large file downloads disabled (max 20MB)")
+        logger.warning("No API_ID/API_HASH — max 20MB files")
+    if config.OPENAI_API_KEY:
+        openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+        logger.info("OpenAI client ready")
 
 
-async def shutdown_pyrogram(app: Application):
-    """Stop Pyrogram client on bot shutdown"""
+async def on_shutdown(app: Application):
     global pyro_client
     if pyro_client:
         await pyro_client.stop()
-        logger.info("Pyrogram client stopped")
 
 
-async def download_file(file_id: str, dest_path: str, update: Update) -> bool:
-    """
-    Download file from Telegram.
-    Uses Pyrogram (MTProto) for large files, falls back to Bot API for small ones.
-    """
+async def download_file(file_id: str, dest: str, update: Update) -> bool:
     try:
         if pyro_client:
-            # Pyrogram: supports up to 2GB
-            await pyro_client.download_media(
-                file_id,
-                file_name=dest_path
-            )
-            return True
+            await pyro_client.download_media(file_id, file_name=dest)
         else:
-            # Fallback: Bot API (max 20MB)
-            file = await update.get_bot().get_file(file_id)
-            await file.download_to_drive(dest_path)
-            return True
+            f = await update.get_bot().get_file(file_id)
+            await f.download_to_drive(dest)
+        return True
     except Exception as e:
         logger.error(f"Download failed: {e}")
         return False
 
 
-# ══════════════════════════════════════════════════════════
-# CHARACTER: Цифровой Умник
-# ══════════════════════════════════════════════════════════
-
-MSGS = {
-    "welcome": (
-        "🧠 <b>Привет! Я Цифровой Умник</b>\n\n"
-        "Кидай мне любой контент — я разберу его как эксперт:\n\n"
-        "🎤 <b>Голосовые и аудио</b> — записи встреч, подкасты\n"
-        "🎬 <b>Видео</b> — лекции, вебинары, созвоны\n"
-        "🔗 <b>Ссылки</b> — YouTube, Google Drive, Dropbox\n\n"
-        "Я <b>сам определю тему</b> и стану экспертом в ней 🎯\n"
-        "Бизнес, маркетинг, медицина, право — что угодно!\n\n"
-        "💡 <i>Попробуй: отправь ссылку на YouTube видео</i>"
-    ),
-
-    "help": (
-        "📖 <b>Как использовать Цифрового Умника:</b>\n\n"
-        "1️⃣ Отправь <b>голосовое/аудио/видео</b> сообщение\n"
-        "2️⃣ Или кинь <b>ссылку</b> на YouTube, Google Drive, Dropbox\n"
-        "3️⃣ Или открой <b>Mini App</b> для записи прямо в боте\n\n"
-        "Я определю тему и дам экспертный анализ:\n"
-        "📌 Факты из записи (только то, что реально сказано!)\n"
-        "💡 Рекомендации эксперта (помечены отдельно)\n"
-        "📊 SWOT-анализ ситуации\n"
-        "✅ Action Items с ответственными и сроками\n"
-        "❓ Открытые вопросы для проработки\n\n"
-        "⚡ <b>Умник адаптируется к ЛЮБОЙ области</b> — бизнес, "
-        "маркетинг, продукт, HR, юриспруденция, медицина, "
-        "образование, дизайн, психология..."
-    ),
-
-    "stages": [
-        "🔍 Определяю источник...",
-        "🎵 Извлекаю аудио...",
-        "📝 Транскрибирую (Deepgram Nova-2)...",
-        "🧩 Анализирую темы и структуру...",
-        "🧠 Погружаюсь в экспертизу...",
-        "📊 Формирую отчёт..."
-    ],
-
-    "done": "🎯 <b>Готово!</b> Вот что я нашёл:",
-    "error": "😅 Упс, что-то пошло не так. Попробуй ещё раз!",
-    "no_audio": "🤔 Не смог разобрать речь. Возможно, качество записи низкое.",
-    "bad_url": "❌ Не удалось извлечь аудио. Проверь ссылку — она публичная?",
-    "too_big": "📦 Файл слишком большой (макс. {max_mb} MB).",
-    "download_fail": "❌ Не удалось скачать файл. Попробуй отправить ещё раз.",
-    "unsupported": (
-        "🤔 Отправь мне:\n"
-        "• 🎤 Голосовое сообщение\n"
-        "• 🔗 Ссылку (YouTube, Google Drive)\n"
-        "• 🎬 Видео файл\n\n"
-        "Или открой Mini App! 👇"
-    ),
-}
+def extract_audio(input_path: str):
+    output = input_path.rsplit(".", 1)[0] + "_audio.wav"
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", input_path,
+             "-vn", "-acodec", "pcm_s16le",
+             "-ar", "16000", "-ac", "1", output],
+            capture_output=True, text=True, timeout=300
+        )
+        if result.returncode == 0 and os.path.exists(output):
+            size_mb = os.path.getsize(output) / (1024 * 1024)
+            logger.info(f"Audio extracted: {size_mb:.1f} MB")
+            return output
+        logger.error(f"ffmpeg error: {result.stderr[:500]}")
+        return None
+    except Exception as e:
+        logger.error(f"ffmpeg failed: {e}")
+        return None
 
 
-# ══════════════════════════════════════════════════════════
-# KEYBOARDS
-# ══════════════════════════════════════════════════════════
-
-def kb_main():
-    rows = []
-    if config.WEBAPP_URL:
-        rows.append([InlineKeyboardButton(
-            "🚀 Открыть Mini App",
-            web_app=WebAppInfo(url=config.WEBAPP_URL)
-        )])
-    rows.extend([
-        [
-            InlineKeyboardButton("📋 Мои отчёты", callback_data="history"),
-            InlineKeyboardButton("⚙️ Настройки", callback_data="settings"),
-        ],
-        [InlineKeyboardButton("❓ Помощь", callback_data="help")],
-    ])
-    return InlineKeyboardMarkup(rows)
-
-
-def kb_formats():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📄 PDF", callback_data="fmt:pdf"),
-            InlineKeyboardButton("🌙 HTML Dark", callback_data="fmt:html_dark"),
-        ],
-        [
-            InlineKeyboardButton("☀️ HTML Light", callback_data="fmt:html_light"),
-            InlineKeyboardButton("📝 TXT", callback_data="fmt:txt"),
-        ],
-        [InlineKeyboardButton("🔧 JSON (API)", callback_data="fmt:json")],
-    ])
-
-
-def kb_settings(user_data: dict):
-    lang = user_data.get("language", "auto")
-    fmt = user_data.get("format", config.DEFAULT_FORMAT)
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"🌐 Язык: {lang}", callback_data="set:language")],
-        [InlineKeyboardButton(f"📊 Формат: {fmt}", callback_data="set:format")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="back")],
-    ])
-
-
-def kb_languages():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🌐 Auto", callback_data="lang:auto"),
-            InlineKeyboardButton("🇷🇺 RU", callback_data="lang:ru"),
-        ],
-        [
-            InlineKeyboardButton("🇺🇸 EN", callback_data="lang:en"),
-            InlineKeyboardButton("🇰🇿 KZ", callback_data="lang:kk"),
-        ],
-    ])
+async def transcribe_audio(audio_path: str, lang: str = "ru"):
+    if not config.DEEPGRAM_API_KEY:
+        logger.error("No DEEPGRAM_API_KEY!")
+        return None
+    url = "https://api.deepgram.com/v1/listen"
+    params = {
+        "model": "nova-2",
+        "language": lang if lang != "auto" else "ru",
+        "smart_format": "true",
+        "punctuate": "true",
+        "paragraphs": "true",
+    }
+    try:
+        file_size = os.path.getsize(audio_path)
+        logger.info(f"Sending {file_size / 1024 / 1024:.1f} MB to Deepgram...")
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            with open(audio_path, "rb") as f:
+                resp = await client.post(
+                    url, params=params,
+                    headers={
+                        "Authorization": f"Token {config.DEEPGRAM_API_KEY}",
+                        "Content-Type": "audio/wav",
+                    },
+                    content=f.read(),
+                )
+        if resp.status_code != 200:
+            logger.error(f"Deepgram {resp.status_code}: {resp.text[:300]}")
+            return None
+        data = resp.json()
+        channels = data.get("results", {}).get("channels", [])
+        if not channels:
+            return None
+        alternatives = channels[0].get("alternatives", [])
+        if not alternatives:
+            return None
+        paragraphs = alternatives[0].get("paragraphs", {})
+        if paragraphs and paragraphs.get("paragraphs"):
+            parts = []
+            for p in paragraphs["paragraphs"]:
+                for s in p.get("sentences", []):
+                    parts.append(s.get("text", ""))
+                parts.append("")
+            text = "\n".join(parts).strip()
+        else:
+            text = alternatives[0].get("transcript", "")
+        logger.info(f"Transcribed: {len(text)} chars, {len(text.split())} words")
+        return text
+    except Exception as e:
+        logger.error(f"Deepgram error: {e}")
+        return None
 
 
-# ══════════════════════════════════════════════════════════
-# PROCESSING PIPELINE — calls Dronor experts step by step
-# ══════════════════════════════════════════════════════════
+ANALYSIS_PROMPT = """Ты — экспертный аналитик. Проанализируй транскрипцию и дай структурированный анализ.
 
-async def update_stage(msg, stage_idx: int):
-    """Update progress message with current stage"""
-    stages = MSGS["stages"]
-    if stage_idx < len(stages):
-        dots = ""
-        for i in range(len(stages)):
-            if i < stage_idx:
-                dots += "✅ "
-            elif i == stage_idx:
-                dots += "⏳ "
-            else:
-                dots += "⬜ "
+Определи область и адаптируй анализ.
 
-        text = f"{dots}\n\n{stages[stage_idx]}"
-        try:
-            await msg.edit_text(text)
-        except Exception:
-            pass
+Формат:
+
+📋 КРАТКОЕ СОДЕРЖАНИЕ
+(2-3 предложения)
+
+📑 ОСНОВНЫЕ ТЕМЫ
+(пронумерованный список)
+
+📌 КЛЮЧЕВЫЕ РЕШЕНИЯ И ФАКТЫ
+(только факты из записи)
+
+✅ ACTION ITEMS
+(задачи: что → кто → когда)
+
+💡 РЕКОМЕНДАЦИИ
+(экспертные рекомендации)
+
+❓ ОТКРЫТЫЕ ВОПРОСЫ
+(что осталось нерешённым)
+
+Пиши на языке транскрипции. Будь конкретным."""
+
+
+async def analyze_text(text: str):
+    if not openai_client:
+        return None
+    max_chars = 100_000
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n\n[...текст обрезан...]"
+    try:
+        resp = await openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": ANALYSIS_PROMPT},
+                {"role": "user", "content": f"Транскрипция:\n\n{text}"},
+            ],
+            temperature=0.3,
+            max_tokens=4000,
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        logger.error(f"OpenAI error: {e}")
+        return None
 
 
 async def process_content(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
-                          url: str = None, file_path: str = None):
-    """
-    Main processing pipeline.
-    Each step = Dronor expert call.
-    """
-    user_id = str(update.effective_user.id)
+                          file_path: str):
     chat = update.effective_chat
-
-    # Progress message
-    msg = await update.message.reply_text("⏳ Запускаю анализ...")
-
+    msg = await update.message.reply_text("⏳ Начинаю обработку...")
+    audio_path = None
     try:
-        # ── Stage 1: URL Resolve ──
-        source_type = "telegram"
-        if url:
-            await update_stage(msg, 0)
-            await chat.send_action(ChatAction.TYPING)
-            resolved = dronor.resolve_url(url)
-            r = resolved.get("result", {})
-            source_type = r.get("source_type", "unknown") if isinstance(r, dict) else "unknown"
-
-        # ── Stage 2: Audio Extraction ──
-        await update_stage(msg, 1)
+        await msg.edit_text("🎵 Извлекаю аудио...")
         await chat.send_action(ChatAction.TYPING)
-        audio = dronor.extract_audio(
-            url=url or "",
-            file_path=file_path or "",
-            source_type=source_type
+        audio_path = await asyncio.get_event_loop().run_in_executor(
+            None, extract_audio, file_path
         )
-        audio_r = audio.get("result", {})
-        audio_path = audio_r.get("audio_path", "") if isinstance(audio_r, dict) else ""
-
         if not audio_path:
-            await msg.edit_text(MSGS["bad_url"])
+            await msg.edit_text("❌ Не удалось извлечь аудио.")
             return
 
-        # ── Stage 3: Transcription (Deepgram) ──
-        await update_stage(msg, 2)
+        await msg.edit_text("📝 Транскрибирую (Deepgram Nova-2)...")
         await chat.send_action(ChatAction.TYPING)
         lang = ctx.user_data.get("language", config.DEFAULT_LANG)
-        trans = dronor.transcribe(audio_path, lang)
-        trans_r = trans.get("result", {})
-        text = trans_r.get("transcription", "") if isinstance(trans_r, dict) else str(trans_r)
-
+        text = await transcribe_audio(audio_path, lang)
         if not text or len(text) < 20:
-            await msg.edit_text(MSGS["no_audio"])
+            await msg.edit_text("🤔 Не удалось разобрать речь.")
             return
 
-        word_count = trans_r.get("word_count", len(text.split())) if isinstance(trans_r, dict) else len(text.split())
-
-        # ── Stage 4: Topic Extraction (GPT-4o) ──
-        await update_stage(msg, 3)
+        word_count = len(text.split())
+        await msg.edit_text(f"🧠 Анализирую ({word_count:,} слов)...")
         await chat.send_action(ChatAction.TYPING)
-        segments_str = ""
-        if isinstance(trans_r, dict) and trans_r.get("segments"):
-            segments_str = json.dumps(trans_r["segments"], ensure_ascii=False)
-        topics = dronor.extract_topics(text, segments_str)
-        topic_data = topics.get("result", {})
-        topic_json = json.dumps(topic_data, ensure_ascii=False, default=str)
+        analysis = await analyze_text(text)
 
-        # ── Stage 5: Expert Analysis (GPT-4o) ──
-        await update_stage(msg, 4)
-        await chat.send_action(ChatAction.TYPING)
-        expert = dronor.analyze_expert(text, topic_json)
-        expert_data = expert.get("result", {})
-        expert_json = json.dumps(expert_data, ensure_ascii=False, default=str)
+        header = f"🧠 <b>Анализ завершён</b>\n📝 Слов: {word_count:,}\n"
+        if analysis:
+            full_msg = header + "\n" + analysis
+            if len(full_msg) <= 4096:
+                await msg.edit_text(full_msg, parse_mode=ParseMode.HTML)
+            else:
+                await msg.edit_text(header, parse_mode=ParseMode.HTML)
+                for i in range(0, len(analysis), 4000):
+                    await update.message.reply_text(analysis[i:i + 4000])
+        else:
+            await msg.edit_text(
+                header + "\n⚠️ Анализ недоступен, транскрипция в файле ниже.",
+                parse_mode=ParseMode.HTML
+            )
 
-        # ── Stage 6: Report Generation ──
-        await update_stage(msg, 5)
-        await chat.send_action(ChatAction.UPLOAD_DOCUMENT)
-        fmt = ctx.user_data.get("format", config.DEFAULT_FORMAT)
-        report = dronor.generate_report(text, topic_json, expert_json, fmt)
-        report_r = report.get("result", {})
-
-        # ═══ BUILD SUMMARY MESSAGE ═══
-        summary = build_summary(topic_data, expert_data, word_count)
-        await msg.edit_text(summary, parse_mode=ParseMode.HTML)
-
-        # Send report file
-        if isinstance(report_r, dict) and report_r.get("file_path"):
-            fpath = report_r["file_path"]
-            if os.path.exists(fpath):
-                with open(fpath, 'rb') as f:
-                    await update.message.reply_document(
-                        InputFile(f, filename=os.path.basename(fpath)),
-                        caption="📊 Полный отчёт Цифрового Умника"
-                    )
-
-        # Format switcher
-        await update.message.reply_text(
-            "📥 Другой формат отчёта?",
-            reply_markup=kb_formats()
-        )
-
-        # ── Save context ──
-        ctx_data = {
-            "domain": topic_data.get("domain", "") if isinstance(topic_data, dict) else "",
-            "meeting_type": topic_data.get("meeting_type", "") if isinstance(topic_data, dict) else "",
-            "topics_count": len(topic_data.get("topics", [])) if isinstance(topic_data, dict) else 0,
-            "word_count": word_count,
-            "format": fmt,
-            "timestamp": datetime.now().isoformat(),
-        }
-        dronor.save_context(user_id, json.dumps(ctx_data, ensure_ascii=False))
-
-        # Save for re-export
-        ctx.user_data["last_transcription"] = text[:5000]
-        ctx.user_data["last_topic_json"] = topic_json[:5000]
-        ctx.user_data["last_expert_json"] = expert_json[:5000]
+        trans_file = tempfile.mktemp(suffix=".txt")
+        with open(trans_file, "w", encoding="utf-8") as f:
+            f.write(f"=== Транскрипция ({word_count} слов) ===\n\n{text}")
+            if analysis:
+                f.write(f"\n\n=== Анализ ===\n\n{analysis}")
+        with open(trans_file, "rb") as f:
+            await update.message.reply_document(
+                InputFile(f, filename="analysis.txt"),
+                caption=f"📄 Полный текст ({word_count:,} слов)"
+            )
+        os.unlink(trans_file)
 
     except Exception as e:
-        logger.error(f"Processing error: {e}", exc_info=True)
+        logger.error(f"Pipeline error: {e}", exc_info=True)
         await msg.edit_text(
-            f"{MSGS['error']}\n\n<code>{str(e)[:300]}</code>",
+            f"😅 Ошибка: <code>{str(e)[:300]}</code>",
             parse_mode=ParseMode.HTML
         )
     finally:
-        # Cleanup temp file
-        if file_path and os.path.exists(file_path):
-            try:
-                os.unlink(file_path)
-            except Exception:
-                pass
+        for p in [file_path, audio_path]:
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
 
-
-def build_summary(topic_data: dict, expert_data: dict, word_count: int) -> str:
-    """Build concise summary message from expert results"""
-    lines = []
-
-    domain = "General"
-    meeting_type = ""
-    if isinstance(topic_data, dict):
-        domain = topic_data.get("domain", "General")
-        meeting_type = topic_data.get("meeting_type", "")
-
-    expert_role = ""
-    if isinstance(expert_data, dict):
-        expert_role = expert_data.get("expert_role", "")
-
-    lines.append(f"🧠 <b>Цифровой Умник — {domain.upper()}</b>")
-    if expert_role:
-        lines.append(f"👤 Эксперт: <i>{expert_role}</i>")
-    if meeting_type:
-        lines.append(f"📋 Тип: {meeting_type}")
-    lines.append(f"📝 Слов: {word_count:,}")
-    lines.append("")
-
-    if isinstance(topic_data, dict):
-        summary = topic_data.get("executive_summary", "")
-        if summary:
-            lines.append(f"📌 {summary}")
-            lines.append("")
-
-    if isinstance(topic_data, dict):
-        topics = topic_data.get("topics", [])
-        if topics:
-            lines.append("<b>📑 Темы:</b>")
-            for i, t in enumerate(topics[:6], 1):
-                name = t.get("name", str(t)) if isinstance(t, dict) else str(t)
-                lines.append(f"  {i}. {name}")
-            lines.append("")
-
-    if isinstance(topic_data, dict):
-        decisions = topic_data.get("decisions", [])
-        if decisions:
-            lines.append("<b>📌 Решения:</b>")
-            for d in decisions[:4]:
-                txt = d.get("text", str(d)) if isinstance(d, dict) else str(d)
-                lines.append(f"  • {txt}")
-            lines.append("")
-
-    if isinstance(topic_data, dict):
-        actions = topic_data.get("action_items", [])
-        if actions:
-            lines.append("<b>✅ Action Items:</b>")
-            for a in actions[:4]:
-                if isinstance(a, dict):
-                    task = a.get("task", "")
-                    who = a.get("assignee", "")
-                    deadline = a.get("deadline", "")
-                    line = f"  • {task}"
-                    if who:
-                        line += f" → {who}"
-                    if deadline:
-                        line += f" ({deadline})"
-                    lines.append(line)
-                else:
-                    lines.append(f"  • {a}")
-            lines.append("")
-
-    if isinstance(expert_data, dict):
-        assess = expert_data.get("assessment", {})
-        if isinstance(assess, dict):
-            strengths = assess.get("strengths", [])
-            weaknesses = assess.get("weaknesses", [])
-            if strengths or weaknesses:
-                lines.append("<b>📊 SWOT (краткий):</b>")
-                if strengths:
-                    s = strengths[0] if isinstance(strengths[0], str) else str(strengths[0])
-                    lines.append(f"  💪 {s[:80]}")
-                if weaknesses:
-                    w = weaknesses[0] if isinstance(weaknesses[0], str) else str(weaknesses[0])
-                    lines.append(f"  ⚠️ {w[:80]}")
-                lines.append("")
-
-    if isinstance(expert_data, dict):
-        recs = expert_data.get("recommendations", [])
-        if recs:
-            lines.append("<b>💡 Главная рекомендация:</b>")
-            rec = recs[0]
-            if isinstance(rec, dict):
-                lines.append(f"  {rec.get('recommendation', str(rec))[:120]}")
-            else:
-                lines.append(f"  {str(rec)[:120]}")
-
-    lines.append("\n📊 <i>Полный отчёт — в файле ниже</i>")
-    return "\n".join(lines)
-
-
-# ══════════════════════════════════════════════════════════
-# MESSAGE HANDLERS
-# ══════════════════════════════════════════════════════════
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    history = dronor.load_context(user_id)
-    if isinstance(history.get("result"), dict):
-        enriched = history["result"].get("context_summary", "")
-        if enriched:
-            ctx.user_data["has_history"] = True
-
     await update.message.reply_text(
-        MSGS["welcome"],
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb_main()
+        "🧠 <b>Meeting Analyzer Bot</b>\n\n"
+        "Отправь мне:\n"
+        "🎤 Голосовое сообщение\n"
+        "🎵 Аудио файл\n"
+        "🎬 Видео файл\n"
+        "🔗 Ссылку на YouTube\n\n"
+        "Я транскрибирую и сделаю экспертный анализ.\n"
+        "Файлы до 2 GB.",
+        parse_mode=ParseMode.HTML
     )
 
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        MSGS["help"],
-        parse_mode=ParseMode.HTML,
-        reply_markup=kb_main()
+        "📖 <b>Как использовать:</b>\n\n"
+        "1. Отправь аудио/видео/голосовое\n"
+        "2. Deepgram транскрибирует\n"
+        "3. GPT-4o анализирует\n"
+        "4. Получаешь анализ + текст файлом\n\n"
+        "Файлы до 2 GB через Pyrogram.",
+        parse_mode=ParseMode.HTML
     )
 
 
 async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Voice messages and audio files"""
     voice = update.message.voice or update.message.audio
     if not voice:
         return
-
     ext = ".ogg" if update.message.voice else ".mp3"
-    tmp_path = tempfile.mktemp(suffix=ext)
-
-    ok = await download_file(voice.file_id, tmp_path, update)
-    if not ok:
-        await update.message.reply_text(MSGS["download_fail"])
+    tmp = tempfile.mktemp(suffix=ext)
+    if not await download_file(voice.file_id, tmp, update):
+        await update.message.reply_text("❌ Не удалось скачать.")
         return
-
-    await process_content(update, ctx, file_path=tmp_path)
+    await process_content(update, ctx, file_path=tmp)
 
 
 async def handle_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Video messages and video notes"""
     video = update.message.video or update.message.video_note
     if not video:
         return
-
-    tmp_path = tempfile.mktemp(suffix=".mp4")
-
-    ok = await download_file(video.file_id, tmp_path, update)
-    if not ok:
-        await update.message.reply_text(MSGS["download_fail"])
+    tmp = tempfile.mktemp(suffix=".mp4")
+    if not await download_file(video.file_id, tmp, update):
+        await update.message.reply_text("❌ Не удалось скачать.")
         return
-
-    await process_content(update, ctx, file_path=tmp_path)
+    await process_content(update, ctx, file_path=tmp)
 
 
 async def handle_document(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Audio/video file uploads — supports up to 2GB via Pyrogram"""
     doc = update.message.document
     if not doc:
         return
-
     mime = doc.mime_type or ""
     fname = (doc.file_name or "").lower()
-    supported_mime = ("audio", "video", "ogg", "mp4", "mp3", "wav", "m4a", "webm", "mpeg", "flac", "aac")
-    supported_ext = (".mp3", ".mp4", ".m4a", ".ogg", ".wav", ".webm", ".flac", ".aac",
-                     ".mov", ".avi", ".mkv", ".wma", ".opus", ".oga")
-
-    is_supported = any(t in mime for t in supported_mime) or any(fname.endswith(e) for e in supported_ext)
-
-    if not is_supported:
-        await update.message.reply_text(
-            "🤔 Отправь аудио или видео файл — документы пока не поддерживаю."
-        )
+    ok_mime = ("audio", "video", "ogg", "mp4", "mp3", "wav", "m4a",
+               "webm", "mpeg", "flac", "aac", "opus")
+    ok_ext = (".mp3", ".mp4", ".m4a", ".ogg", ".wav", ".webm", ".flac",
+              ".aac", ".mov", ".avi", ".mkv", ".wma", ".opus", ".oga")
+    if not (any(t in mime for t in ok_mime) or
+            any(fname.endswith(e) for e in ok_ext)):
+        await update.message.reply_text("🤔 Отправь аудио или видео файл.")
         return
-
-    # Check file size
-    file_size_mb = (doc.file_size or 0) / (1024 * 1024)
-    if file_size_mb > config.MAX_FILE_MB:
-        await update.message.reply_text(
-            MSGS["too_big"].format(max_mb=config.MAX_FILE_MB)
-        )
+    size_mb = (doc.file_size or 0) / (1024 * 1024)
+    if size_mb > config.MAX_FILE_MB:
+        await update.message.reply_text(f"📦 Макс. {config.MAX_FILE_MB} MB.")
         return
-
-    logger.info(f"📥 Downloading document: {doc.file_name} ({file_size_mb:.1f} MB)")
-
+    logger.info(f"Downloading: {doc.file_name} ({size_mb:.1f} MB)")
     ext = os.path.splitext(doc.file_name or "file.mp4")[1] or ".mp4"
-    tmp_path = tempfile.mktemp(suffix=ext)
-
-    ok = await download_file(doc.file_id, tmp_path, update)
-    if not ok:
-        await update.message.reply_text(MSGS["download_fail"])
+    tmp = tempfile.mktemp(suffix=ext)
+    if not await download_file(doc.file_id, tmp, update):
+        await update.message.reply_text("❌ Не удалось скачать.")
         return
-
-    logger.info(f"✅ Downloaded to {tmp_path} ({os.path.getsize(tmp_path) / 1024 / 1024:.1f} MB)")
-    await process_content(update, ctx, file_path=tmp_path)
+    logger.info(f"Downloaded: {os.path.getsize(tmp) / 1024 / 1024:.1f} MB")
+    await process_content(update, ctx, file_path=tmp)
 
 
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Text messages — check for URLs"""
     text = (update.message.text or "").strip()
     if not text:
         return
-
-    urls = re.findall(r'https?://\S+', text)
-    if urls:
-        await process_content(update, ctx, url=urls[0])
-    else:
-        await update.message.reply_text(
-            MSGS["unsupported"],
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_main()
-        )
-
-
-# ══════════════════════════════════════════════════════════
-# CALLBACK HANDLERS
-# ══════════════════════════════════════════════════════════
-
-async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
-
-    if data.startswith("fmt:"):
-        fmt = data.split(":")[1]
-        ctx.user_data["format"] = fmt
-
-        last_trans = ctx.user_data.get("last_transcription")
-        last_topic = ctx.user_data.get("last_topic_json")
-        last_expert = ctx.user_data.get("last_expert_json")
-
-        if last_trans and last_topic and last_expert:
-            await q.message.edit_text(f"📊 Генерирую отчёт в формате <b>{fmt}</b>...",
-                                      parse_mode=ParseMode.HTML)
-            report = dronor.generate_report(last_trans, last_topic, last_expert, fmt)
-            report_r = report.get("result", {})
-            if isinstance(report_r, dict) and report_r.get("file_path"):
-                fpath = report_r["file_path"]
-                if os.path.exists(fpath):
-                    with open(fpath, 'rb') as f:
-                        await q.message.reply_document(
-                            InputFile(f, filename=os.path.basename(fpath)),
-                            caption=f"📊 Отчёт ({fmt})"
-                        )
+    yt = re.search(r'(https?://(www\.)?(youtube\.com|youtu\.be)/\S+)', text)
+    if yt:
+        url = yt.group(1)
+        msg = await update.message.reply_text("📥 Скачиваю с YouTube...")
+        try:
+            tmp = tempfile.mktemp(suffix=".m4a")
+            r = subprocess.run(
+                ["yt-dlp", "-x", "--audio-format", "m4a", "-o", tmp, url],
+                capture_output=True, text=True, timeout=600
+            )
+            if r.returncode == 0 and os.path.exists(tmp):
+                await msg.edit_text("✅ Скачано!")
+                await process_content(update, ctx, file_path=tmp)
             else:
-                await q.message.edit_text(f"✅ Формат: <b>{fmt}</b>. Отправь контент для анализа.",
-                                          parse_mode=ParseMode.HTML)
-        else:
-            await q.message.edit_text(f"✅ Формат: <b>{fmt}</b>. Отправь контент для анализа.",
-                                      parse_mode=ParseMode.HTML)
+                await msg.edit_text(f"❌ Ошибка YouTube:\n<code>{r.stderr[:200]}</code>",
+                                    parse_mode=ParseMode.HTML)
+        except Exception as e:
+            await msg.edit_text(f"❌ {str(e)[:200]}")
+        return
+    await update.message.reply_text(
+        "🤔 Отправь аудио, видео, голосовое или ссылку на YouTube."
+    )
 
-    elif data == "settings":
-        await q.message.edit_text(
-            "⚙️ <b>Настройки Цифрового Умника</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_settings(ctx.user_data)
-        )
-
-    elif data == "set:language":
-        await q.message.edit_text(
-            "🌐 <b>Выбери язык транскрипции:</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_languages()
-        )
-
-    elif data.startswith("lang:"):
-        lang = data.split(":")[1]
-        ctx.user_data["language"] = lang
-        await q.message.edit_text(
-            f"✅ Язык: <b>{lang}</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_settings(ctx.user_data)
-        )
-
-    elif data == "set:format":
-        await q.message.edit_text(
-            "📊 <b>Выбери формат отчёта:</b>",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_formats()
-        )
-
-    elif data == "history":
-        user_id = str(q.from_user.id)
-        history = dronor.get_user_history(user_id)
-        hist_r = history.get("result", {})
-
-        if isinstance(hist_r, dict):
-            sessions = hist_r.get("sessions", [])
-            if sessions:
-                lines = ["📋 <b>Последние анализы:</b>\n"]
-                for s in sessions[:5]:
-                    ts = s.get("timestamp", "")[:16]
-                    domain = s.get("domain", "?")
-                    lines.append(f"  • {ts} — {domain}")
-                await q.message.edit_text(
-                    "\n".join(lines),
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                await q.message.edit_text("📋 Пока нет анализов. Отправь контент!")
-        else:
-            await q.message.edit_text("📋 Пока нет анализов. Отправь контент!")
-
-    elif data == "help":
-        await q.message.reply_text(MSGS["help"], parse_mode=ParseMode.HTML)
-
-    elif data == "back":
-        await q.message.edit_text(
-            "🧠 <b>Цифровой Умник</b> — готов к работе!",
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb_main()
-        )
-
-
-# ══════════════════════════════════════════════════════════
-# ERROR HANDLER
-# ══════════════════════════════════════════════════════════
 
 async def error_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Global error handler"""
-    logger.error(f"Update {update} caused error: {ctx.error}", exc_info=ctx.error)
-    if update and update.message:
-        try:
-            await update.message.reply_text(
-                f"{MSGS['error']}\n\n<code>{str(ctx.error)[:200]}</code>",
-                parse_mode=ParseMode.HTML
-            )
-        except Exception:
-            pass
+    logger.error(f"Error: {ctx.error}", exc_info=ctx.error)
 
-
-# ══════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════
 
 def main():
     if not config.BOT_TOKEN:
-        logger.error("❌ TELEGRAM_BOT_TOKEN not set!")
+        logger.error("TELEGRAM_BOT_TOKEN not set!")
         return
-
     app = Application.builder().token(config.BOT_TOKEN).build()
-
-    # Lifecycle hooks for Pyrogram
-    app.post_init = init_pyrogram
-    app.post_shutdown = shutdown_pyrogram
-
-    # Commands
+    app.post_init = on_startup
+    app.post_shutdown = on_shutdown
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
-
-    # Content handlers
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.VIDEO | filters.VIDEO_NOTE, handle_video))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    # Callbacks
-    app.add_handler(CallbackQueryHandler(handle_callback))
-
-    # Error handler
     app.add_error_handler(error_handler)
-
-    logger.info("🧠 Цифровой Умник v5.0 запущен!")
-    logger.info(f"   Dronor API: {config.DRONOR_API}")
-    logger.info(f"   Pyrogram: {'enabled' if config.API_ID else 'disabled'}")
-    logger.info(f"   Mini App: {config.WEBAPP_URL or 'disabled'}")
-
+    logger.info("Bot started!")
+    logger.info(f"  Pyrogram: {'yes' if config.API_ID else 'no'}")
+    logger.info(f"  Deepgram: {'yes' if config.DEEPGRAM_API_KEY else 'NO!'}")
+    logger.info(f"  OpenAI: {'yes' if config.OPENAI_API_KEY else 'NO!'}")
     app.run_polling(drop_pending_updates=True)
 
 
