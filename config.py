@@ -1,27 +1,21 @@
-"""Configuration for MTNGanlzrBot — Цифровой Умник"""
 import os
-from dataclasses import dataclass, field
-from typing import Dict
+from dotenv import load_dotenv
 
+load_dotenv()
 
-@dataclass
-class Config:
-    BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    API_ID: int = int(os.getenv("TELEGRAM_API_ID", "0"))
-    API_HASH: str = os.getenv("TELEGRAM_API_HASH", "")
-    DEEPGRAM_API_KEY: str = os.getenv("DEEPGRAM_API_KEY", "")
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    MAX_FILE_MB: int = 2000
-    DEFAULT_LANG: str = "ru"
+# Telegram
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+WEBAPP_URL = os.getenv('WEBAPP_URL', '')
 
-    # Supported languages: code -> (display_name, deepgram_code, flag)
-    LANGUAGES: Dict = field(default_factory=lambda: {
-        "ru": ("Русский", "ru", "🇷🇺"),
-        "en": ("English", "en", "🇬🇧"),
-        "kk": ("Қазақша", "kk", "🇰🇿"),
-        "es": ("Español", "es", "🇪🇸"),
-        "auto": ("Авто (язык аудио)", None, "🔄"),
-    })
+# OpenAI
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+WHISPER_MODEL = os.getenv('WHISPER_MODEL', 'whisper-1')
 
+# Dronor (optional)
+DRONOR_API_URL = os.getenv('DRONOR_API_URL', '')
+DRONOR_API_TOKEN = os.getenv('DRONOR_API_TOKEN', '')
 
-config = Config()
+# Limits
+MAX_FILE_SIZE_MB = int(os.getenv('MAX_FILE_SIZE_MB', '100'))
+MAX_TRANSCRIPT_LENGTH = int(os.getenv('MAX_TRANSCRIPT_LENGTH', '50000'))
