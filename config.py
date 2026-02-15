@@ -1,39 +1,43 @@
 import os
-from dotenv import load_dotenv
 from dataclasses import dataclass
 from typing import Optional
 
-load_dotenv()
-
 @dataclass
 class Config:
-    # Telegram
-    TELEGRAM_TOKEN: str = os.getenv('TELEGRAM_TOKEN', '')
-    WEBAPP_URL: str = os.getenv('WEBAPP_URL', '')
+    # Telegram Bot (reads TELEGRAM_BOT_TOKEN from Railway)
+    TELEGRAM_TOKEN: str = os.getenv('TELEGRAM_BOT_TOKEN', '')
+    
+    # Telegram API for pyrogram (reads TELEGRAM_API_ID, TELEGRAM_API_HASH)
+    API_ID: Optional[int] = int(os.getenv('TELEGRAM_API_ID', '0')) if os.getenv('TELEGRAM_API_ID') else None
+    API_HASH: Optional[str] = os.getenv('TELEGRAM_API_HASH')
     
     # OpenAI
     OPENAI_API_KEY: str = os.getenv('OPENAI_API_KEY', '')
-    OPENAI_MODEL: str = os.getenv('OPENAI_MODEL', 'gpt-4o')
-    WHISPER_MODEL: str = os.getenv('WHISPER_MODEL', 'whisper-1')
     
     # Deepgram
     DEEPGRAM_API_KEY: str = os.getenv('DEEPGRAM_API_KEY', '')
     
-    # Pyrogram (for large files >20MB)
-    API_ID: Optional[int] = int(os.getenv('API_ID', '0')) if os.getenv('API_ID') else None
-    API_HASH: Optional[str] = os.getenv('API_HASH')
+    # File limits
+    MAX_FILE_SIZE_MB: int = int(os.getenv('MAX_FILE_SIZE_MB', '100'))
     
-    # Limits
-    MAX_FILE_MB: int = int(os.getenv('MAX_FILE_SIZE_MB', '2000'))
+    # Supported formats
+    SUPPORTED_AUDIO: tuple = ('.mp3', '.m4a', '.wav', '.ogg', '.flac', '.aac', '.wma')
+    SUPPORTED_VIDEO: tuple = ('.mp4', '.mov', '.avi', '.mkv', '.webm')
     
-    # Aliases for backward compatibility
     @property
     def BOT_TOKEN(self) -> str:
+        """Alias for TELEGRAM_TOKEN"""
         return self.TELEGRAM_TOKEN
     
     @property
-    def MAX_FILE_SIZE_MB(self) -> int:
-        return self.MAX_FILE_MB
+    def MAX_FILE_MB(self) -> int:
+        """Alias for MAX_FILE_SIZE_MB"""
+        return self.MAX_FILE_SIZE_MB
+    
+    @property
+    def PYROGRAM_ENABLED(self) -> bool:
+        """Check if pyrogram can be used"""
+        return bool(self.API_ID and self.API_HASH)
 
 # Singleton instance
 config = Config()
