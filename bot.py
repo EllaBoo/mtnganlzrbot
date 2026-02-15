@@ -8,6 +8,8 @@ Direct ffmpeg + Deepgram + OpenAI (no external services)
 - Железные правила (не выдумывать, не создавать ложных конфликтов)
 - Анализ динамики беседы (для 2+ участников)
 - Диаризация (определение спикеров)
+
+v4: Iron Rules + Diarization + Dynamics Analysis
 """
 import asyncio
 import logging
@@ -121,7 +123,7 @@ LANG_TO_DEEPGRAM = {
     "en": "en",
     "kk": "kk",
     "es": "es",
-    "auto": "ru",  # fallback
+    "auto": "ru",
 }
 
 
@@ -224,7 +226,7 @@ async def transcribe_audio(audio_path: str, lang: str = "ru"):
         "smart_format": "true",
         "punctuate": "true",
         "paragraphs": "true",
-        "diarize": "true",  # ← ДИАРИЗАЦИЯ: определение спикеров
+        "diarize": "true",
         "detect_language": "true" if lang == "auto" else "false",
     }
     try:
@@ -245,7 +247,6 @@ async def transcribe_audio(audio_path: str, lang: str = "ru"):
             return None, None, 1
         data = resp.json()
         
-        # Определяем язык
         detected_lang = lang
         if lang == "auto":
             detected = data.get("results", {}).get("channels", [{}])[0].get("detected_language", "ru")
@@ -258,7 +259,6 @@ async def transcribe_audio(audio_path: str, lang: str = "ru"):
         if not alternatives:
             return None, detected_lang, 1
         
-        # Подсчёт спикеров из диаризации
         speakers = set()
         words = alternatives[0].get("words", [])
         for word in words:
@@ -268,7 +268,6 @@ async def transcribe_audio(audio_path: str, lang: str = "ru"):
         num_speakers = len(speakers) if speakers else 1
         logger.info(f"Detected {num_speakers} speaker(s)")
         
-        # Текст с параграфами
         paragraphs = alternatives[0].get("paragraphs", {})
         if paragraphs and paragraphs.get("paragraphs"):
             parts = []
@@ -505,7 +504,6 @@ def format_dynamics_summary(dynamics: dict, lang: str = "ru") -> str:
     lines = []
     atm = dynamics.get("overall_atmosphere", {})
     
-    # Уровень напряжения
     tension_map = {
         "low": "🟢 спокойная",
         "moderate": "🟡 умеренное напряжение", 
@@ -516,18 +514,15 @@ def format_dynamics_summary(dynamics: dict, lang: str = "ru") -> str:
     if tension:
         lines.append(f"**Атмосфера:** {tension}")
     
-    # Summary
     if atm.get("summary"):
         lines.append(atm["summary"])
     
-    # Ключевые наблюдения (только high confidence)
     key_obs = dynamics.get("key_observations", [])
     if key_obs:
         lines.append("\n**Ключевые наблюдения:**")
         for obs in key_obs[:3]:
             lines.append(f"  ⚡ {obs}")
     
-    # Здоровые паттерны
     healthy = dynamics.get("healthy_patterns", [])
     if healthy:
         lines.append(f"\n**Здоровые паттерны:** {', '.join(healthy[:3])}")
@@ -542,7 +537,6 @@ def has_notable_dynamics(dynamics: dict) -> bool:
     atm = dynamics.get("overall_atmosphere", {})
     if atm.get("tension_level") in ("n/a", "unknown", None):
         return False
-    # Есть что-то интересное?
     return (
         len(dynamics.get("power_dynamics", [])) > 0 or
         len(dynamics.get("tension_markers", [])) > 0 or
@@ -572,7 +566,6 @@ async def process_content(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         await msg.edit_text(get_msg(lang, "transcribing"))
         await chat.send_action(ChatAction.TYPING)
         
-        # Транскрипция с диаризацией
         text, detected_lang, num_speakers = await transcribe_audio(audio_path, lang)
         
         if lang == "auto" and detected_lang:
@@ -587,17 +580,14 @@ async def process_content(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         await msg.edit_text(get_msg(lang, "analyzing"))
         await chat.send_action(ChatAction.TYPING)
         
-        # Основной анализ
         analysis = await analyze_text_json(text, lang)
         
-        # Анализ динамики (только для 2+ участников)
         dynamics = None
         if num_speakers >= 2:
             await msg.edit_text(get_msg(lang, "analyzing_dynamics"))
             dynamics = await analyze_dynamics(text, num_speakers, lang)
         
         if not analysis:
-            # Fallback — отправляем просто текст
             await msg.edit_text(f"🧠 Анализ завершён\n📝 Слов: {word_count:,}")
             trans_file = tempfile.mktemp(suffix=".txt")
             with open(trans_file, "w", encoding="utf-8") as f:
@@ -613,26 +603,21 @@ async def process_content(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         await msg.edit_text(get_msg(lang, "generating"))
         await chat.send_action(ChatAction.UPLOAD_DOCUMENT)
 
-        # Генерируем название файла
         title = analysis.get("title", "Анализ встречи")
         date_str = datetime.now().strftime("%Y-%m-%d")
         base_filename = f"{safe_filename(title)}_{date_str}"
 
-        # 1. Транскрипт TXT
         trans_file = tempfile.mktemp(suffix=".txt")
         with open(trans_file, "w", encoding="utf-8") as f:
             f.write(f"=== Транскрипция ({word_count} слов, {num_speakers} спикер(ов)) ===\n\n{text}")
 
-        # 2. PDF отчёт
         pdf_path = generate_pdf_report(analysis, lang)
 
-        # 3. HTML артефакт
         html_content = generate_html_report(analysis, lang)
         html_path = tempfile.mktemp(suffix=".html")
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html_content)
 
-        # Формируем summary для чата
         summary_lines = [get_msg(lang, "done")]
         summary_lines.append(f"\n📋 **{title}**")
         
@@ -642,14 +627,12 @@ async def process_content(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         
         summary_lines.append(f"\n📊 **Статистика:** {word_count:,} слов, {num_speakers} спикер(ов)")
         
-        # Ключевые решения
         decisions = analysis.get("decisions", [])
         if decisions:
             summary_lines.append("\n🎯 **Решения:**")
             for d in decisions[:3]:
                 summary_lines.append(f"  ✅ {d}")
         
-        # Динамика беседы (если есть)
         if dynamics and has_notable_dynamics(dynamics):
             dyn_summary = format_dynamics_summary(dynamics, lang)
             if dyn_summary:
@@ -657,28 +640,24 @@ async def process_content(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
         
         await msg.edit_text("\n".join(summary_lines), parse_mode=ParseMode.MARKDOWN)
 
-        # Отправляем PDF
         with open(pdf_path, "rb") as f:
             await update.message.reply_document(
                 InputFile(f, filename=f"{base_filename}.pdf"),
                 caption="📊 Экспертный отчёт (PDF)"
             )
 
-        # Отправляем HTML
         with open(html_path, "rb") as f:
             await update.message.reply_document(
                 InputFile(f, filename=f"{base_filename}.html"),
                 caption="🌐 Интерактивный отчёт (HTML)"
             )
 
-        # Отправляем транскрипт
         with open(trans_file, "rb") as f:
             await update.message.reply_document(
                 InputFile(f, filename="transcript.txt"),
                 caption=f"📝 Транскрипция ({word_count:,} слов)"
             )
 
-        # Cleanup
         for p in [trans_file, pdf_path, html_path]:
             if p and os.path.exists(p):
                 os.unlink(p)
@@ -697,10 +676,6 @@ async def process_content(update: Update, ctx: ContextTypes.DEFAULT_TYPE,
                 except Exception:
                     pass
 
-
-# ==========================================
-# ОБРАБОТЧИКИ ФАЙЛОВ — СНАЧАЛА СПРАШИВАЕМ ЯЗЫК
-# ==========================================
 
 async def save_file_and_ask_language(update: Update, ctx: ContextTypes.DEFAULT_TYPE, 
                                       file_id: str, file_ext: str):
@@ -875,4 +850,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-v4: Iron Rules + Diarization + Dynamics Analysis
