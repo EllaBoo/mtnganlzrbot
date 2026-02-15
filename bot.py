@@ -29,7 +29,13 @@ from telegram.ext import (
 )
 from telegram.constants import ChatAction, ParseMode
 
-from pyrogram import Client as PyroClient
+# Pyrogram - optional for large files (>20MB)
+try:
+    from pyrogram import Client as PyroClient
+    PYROGRAM_AVAILABLE = True
+except ImportError:
+    PyroClient = None
+    PYROGRAM_AVAILABLE = False
 
 from config import config
 from report_generator import generate_pdf_report, generate_html_report, safe_filename
@@ -152,7 +158,7 @@ def get_language_keyboard() -> InlineKeyboardMarkup:
 
 async def on_startup(app: Application):
     global pyro_client, openai_client
-    if config.API_ID and config.API_HASH:
+    if PYROGRAM_AVAILABLE and config.API_ID and config.API_HASH:
         pyro_client = PyroClient(
             "bot_downloader",
             api_id=config.API_ID,
@@ -164,7 +170,10 @@ async def on_startup(app: Application):
         await pyro_client.start()
         logger.info("Pyrogram started (large file support)")
     else:
-        logger.warning("No API_ID/API_HASH — max 20MB files")
+        if not PYROGRAM_AVAILABLE:
+            logger.warning("Pyrogram not installed — max 20MB files")
+        else:
+            logger.warning("No API_ID/API_HASH — max 20MB files")
     if config.OPENAI_API_KEY:
         openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
         logger.info("OpenAI client ready")
@@ -841,7 +850,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_error_handler(error_handler)
     logger.info("Bot started!")
-    logger.info(f"  Pyrogram: {'yes' if config.API_ID else 'no'}")
+    logger.info(f"  Pyrogram: {'yes' if PYROGRAM_AVAILABLE and config.API_ID else 'no'}")
     logger.info(f"  Deepgram: {'yes' if config.DEEPGRAM_API_KEY else 'NO!'}")
     logger.info(f"  OpenAI: {'yes' if config.OPENAI_API_KEY else 'NO!'}")
     logger.info("  Features: Iron Rules ✓, Diarization ✓, Dynamics Analysis ✓")
