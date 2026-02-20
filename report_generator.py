@@ -1,345 +1,419 @@
-"""
-Report Generator — PDF + HTML for Цифровой Умник
-Generates professional meeting analysis reports in two formats.
-"""
-import json
-import logging
 import os
-import tempfile
+from jinja2 import Template
+from weasyprint import HTML
+from weasyprint.text.fonts import FontConfiguration
 from datetime import datetime
+from config import Config
 
-logger = logging.getLogger("report")
+class ReportGenerator:
+    
+    def __init__(self):
+        self.template = self._get_template()
+        self.css = self._get_css()
+    
+    def _get_template(self) -> str:
+        return '''<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+    <style>{{ css }}</style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">Digital Smarty</div>
+            <h1>{{ title }}</h1>
+            <div class="meta">
+                <span>{{ date }}</span>
+                <span>{{ duration }} min</span>
+                <span>{{ participants }} participants</span>
+                {% if detected_language %}
+                <span>{{ detected_language }}</span>
+                {% endif %}
+            </div>
+        </header>
 
+        {% if smarty_comment %}
+        <div class="smarty-quote">
+            <em>"{{ smarty_comment }}"</em>
+            <span class="signature">- Digital Smarty</span>
+        </div>
+        {% endif %}
 
-def generate_html_report(analysis: dict, lang: str = "ru") -> str:
-    """Generate interactive HTML with collapsible sections."""
-    title = analysis.get("title", "Анализ встречи")
-    now = datetime.now().strftime("%d.%m.%Y в %H:%M")
-    summary = analysis.get("executive_summary", "")
-    ctx = analysis.get("context", {})
-    goals = analysis.get("goals", {})
-    topics = analysis.get("key_topics", [])
-    decisions = analysis.get("decisions", [])
-    action_items = analysis.get("action_items", [])
-    recommendations = analysis.get("recommendations", {})
-    open_questions = analysis.get("open_questions", [])
-    swot = analysis.get("swot", {})
-    risks = analysis.get("risks", [])
-    action_plan = analysis.get("action_plan", {})
-    kpi = analysis.get("kpi", [])
-    hidden_dynamics = analysis.get("hidden_dynamics", [])
-    conclusion = analysis.get("conclusion", {})
-    positions = analysis.get("positions", {})
-    agreement = analysis.get("agreement_points", [])
-    disagreement = analysis.get("disagreement_points", [])
-    labels = _get_labels(lang)
+        <section class="topics">
+            <h2>Key Topics</h2>
+            {% for topic in key_topics %}
+            <div class="topic-card {{ topic.importance }}">
+                <h3>{{ topic.topic }}</h3>
+                <p>{{ topic.summary }}</p>
+                <span class="badge">{{ topic.importance }}</span>
+            </div>
+            {% endfor %}
+        </section>
 
-    def make_list(items):
-        if not items:
-            return "<p style='color:#888;'>—</p>"
-        return "".join(f"<li>{_esc(item)}</li>" for item in items)
+        <section class="speakers">
+            <h2>Speaker Positions</h2>
+            {% for speaker in speaker_positions %}
+            <div class="speaker-card">
+                <h3>{{ speaker.speaker }}</h3>
+                <p class="stance">{{ speaker.stance }}</p>
+                <ul>
+                {% for point in speaker.main_points %}
+                    <li>{{ point }}</li>
+                {% endfor %}
+                </ul>
+            </div>
+            {% endfor %}
+        </section>
 
-    def make_section(id_, icon, title, content, rec=None):
-        rec_html = ""
-        if rec:
-            rec_html = f'<div class="rec-box"><div class="rec-label">💡 {labels["smarty_rec"]}</div><p>{_esc(rec)}</p></div>'
-        return f'<div class="section" id="sec-{id_}"><div class="section-header" onclick="toggle(\'{id_}\')"><span>{icon} {title}</span><span class="chevron" id="chev-{id_}">▶</span></div><div class="section-body" id="body-{id_}" style="display:none;">{content}{rec_html}</div></div>'
+        {% if decisions %}
+        <section class="decisions">
+            <h2>Decisions Made</h2>
+            <ol>
+            {% for d in decisions %}
+                <li>
+                    <strong>{{ d.decision }}</strong>
+                    {% if d.context %}<br><small>{{ d.context }}</small>{% endif %}
+                </li>
+            {% endfor %}
+            </ol>
+        </section>
+        {% endif %}
 
-    sections = []
-    sections.append(f'<div class="section"><div class="section-header open"><span>📋 {labels["summary"]}</span></div><div class="section-body" style="display:block;"><p>{_esc(summary)}</p></div></div>')
+        {% if action_items %}
+        <section class="tasks">
+            <h2>Action Items</h2>
+            <div class="task-list">
+            {% for task in action_items %}
+                <div class="task-item">
+                    <span class="checkbox">[ ]</span>
+                    <span class="task-text">{{ task.task }}</span>
+                    <span class="responsible">-> {{ task.responsible }}</span>
+                    {% if task.deadline and task.deadline != "null" %}
+                    <span class="deadline">{{ task.deadline }}</span>
+                    {% endif %}
+                </div>
+            {% endfor %}
+            </div>
+        </section>
+        {% endif %}
 
-    ctx_html = f'<table class="info-table"><tr><td class="label">{labels["industry"]}</td><td>{_esc(ctx.get("industry","—"))}</td></tr><tr><td class="label">{labels["meeting_type"]}</td><td>{_esc(ctx.get("meeting_type","—"))}</td></tr><tr><td class="label">{labels["complexity"]}</td><td>{_esc(ctx.get("complexity","—"))}</td></tr></table>'
-    sections.append(make_section("ctx", "🏢", labels["context"], ctx_html))
+        {% if open_questions or risks %}
+        <section class="warnings">
+            <h2>Open Questions and Risks</h2>
+            
+            {% if open_questions %}
+            <div class="questions">
+                <h3>Questions</h3>
+                <ul>
+                {% for q in open_questions %}
+                    <li>{{ q.question }}</li>
+                {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+            
+            {% if risks %}
+            <div class="risks">
+                <h3>Risks</h3>
+                {% for r in risks %}
+                <div class="risk-item {{ r.severity }}">
+                    <span class="severity-dot"></span>
+                    {{ r.risk }}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
 
-    goals_html = f'<h4>{labels["explicit_goals"]}</h4><ul>{make_list(goals.get("explicit",[]))}</ul><h4>{labels["hidden_goals"]}</h4><ul>{make_list(goals.get("hidden",[]))}</ul>'
-    sections.append(make_section("goals", "🎯", labels["goals"], goals_html))
+        {% if reality_check %}
+        <section class="reality-check">
+            <h2>Reality Check</h2>
+            <div class="feasibility">
+                <strong>Feasibility Assessment:</strong>
+                <p>{{ reality_check.feasibility }}</p>
+            </div>
+            
+            {% if reality_check.concerns %}
+            <div class="concerns">
+                <strong>Potential Issues:</strong>
+                <ul>
+                {% for c in reality_check.concerns %}
+                    <li>{{ c }}</li>
+                {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+            
+            {% if reality_check.recommendations %}
+            <div class="recommendations">
+                <strong>Recommendations:</strong>
+                <ul>
+                {% for r in reality_check.recommendations %}
+                    <li>{{ r }}</li>
+                {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
 
-    topics_html = "<ol>" + "".join(f'<li><strong>{_esc(t.get("topic",t) if isinstance(t,dict) else t)}</strong>' + (f'<p>{_esc(t.get("details",""))}</p>' if isinstance(t,dict) and t.get("details") else "") + '</li>' for t in topics) + "</ol>"
-    sections.append(make_section("topics", "📑", labels["topics"], topics_html))
+        <section class="insights">
+            <h2>Key Insights</h2>
+            <ol class="insights-list">
+            {% for insight in key_insights %}
+                <li>{{ insight }}</li>
+            {% endfor %}
+            </ol>
+        </section>
 
-    if positions:
-        pos_html = ""
-        for sk in ["side_a","side_b"]:
-            s = positions.get(sk,{})
-            if s:
-                lb = s.get("label",sk.replace("_"," ").title())
-                pos_html += f'<div class="position-box"><h4>{_esc(lb)}</h4><p><strong>{labels["position"]}:</strong> {_esc(s.get("position","—"))}</p><p><strong>{labels["interests"]}:</strong> {_esc(s.get("interests","—"))}</p></div>'
-        sections.append(make_section("pos", "⚖️", labels["positions"], pos_html))
+        <footer>
+            <p>Generated by Digital Smarty v4.0 | {{ generated_at }}</p>
+        </footer>
+    </div>
+</body>
+</html>'''
 
-    agree_html = f'<h4>✅ {labels["agreement"]}</h4><ul>{make_list(agreement)}</ul><h4>❌ {labels["disagreement"]}</h4><ul>{make_list(disagreement)}</ul>'
-    sections.append(make_section("agree", "🤝", labels["consensus"], agree_html))
+    def _get_css(self) -> str:
+        return '''
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
-    sections.append(make_section("dec", "📌", labels["decisions"], f'<ul>{make_list(decisions)}</ul>'))
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
-    ai_html = f'<table class="ai-table"><tr><th>{labels["task"]}</th><th>{labels["responsible"]}</th><th>{labels["deadline"]}</th></tr>'
-    for item in action_items:
-        if isinstance(item, dict):
-            ai_html += f'<tr><td>{_esc(item.get("task",""))}</td><td>{_esc(item.get("responsible","—"))}</td><td>{_esc(item.get("deadline","—"))}</td></tr>'
-        else:
-            ai_html += f'<tr><td colspan="3">{_esc(item)}</td></tr>'
-    ai_html += "</table>"
-    sections.append(make_section("ai", "✅", labels["action_items"], ai_html))
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #1a1a2e;
+    background: #ffffff;
+}
 
-    swot_html = '<div class="swot-grid">'
-    for key, (icon, label) in {"strengths":("💪",labels.get("strengths","S")),"weaknesses":("⚠️",labels.get("weaknesses","W")),"opportunities":("🚀",labels.get("opportunities","O")),"threats":("🔥",labels.get("threats","T"))}.items():
-        swot_html += f'<div class="swot-cell swot-{key}"><h4>{icon} {label}</h4><ul>{make_list(swot.get(key,[]))}</ul></div>'
-    swot_html += "</div>"
-    sections.append(make_section("swot", "📊", "SWOT", swot_html))
+.container { max-width: 800px; margin: 0 auto; padding: 40px; }
 
-    rec_html = f'<h4>💡 {labels["rec_substance"]}</h4><ul>{make_list(recommendations.get("substance",[]))}</ul><h4>🛠 {labels["rec_method"]}</h4><ul>{make_list(recommendations.get("methodology",[]))}</ul>'
-    sections.append(make_section("rec", "💡", labels["recommendations"], rec_html))
+header {
+    text-align: center;
+    margin-bottom: 30px;
+    padding-bottom: 20px;
+    border-bottom: 2px solid #eef2f7;
+}
 
-    risk_html = f'<table class="ai-table"><tr><th>{labels["risk"]}</th><th>{labels["severity"]}</th><th>{labels["mitigation"]}</th></tr>'
-    for r in risks:
-        if isinstance(r,dict):
-            risk_html += f'<tr><td>{_esc(r.get("risk",""))}</td><td>{_esc(r.get("severity",""))}</td><td>{_esc(r.get("mitigation",""))}</td></tr>'
-    risk_html += "</table>"
-    sections.append(make_section("risks", "⚡", labels["risks_title"], risk_html))
+.logo { font-size: 24px; margin-bottom: 10px; }
 
-    sections.append(make_section("oq", "❓", labels["open_questions"], f'<ul>{make_list(open_questions)}</ul>'))
+header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 15px;
+}
 
-    plan_html = ""
-    for pk, pl in [("urgent",labels["urgent"]),("medium",labels["medium"]),("long_term",labels["long_term"])]:
-        items = action_plan.get(pk,[])
-        if items:
-            plan_html += f'<h4>⏰ {pl}</h4><ul>{make_list(items)}</ul>'
-    if kpi:
-        plan_html += f'<h4>📈 KPI</h4><ul>{make_list(kpi)}</ul>'
-    sections.append(make_section("plan", "🗓", labels["action_plan"], plan_html))
+.meta {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    color: #64748b;
+    font-size: 13px;
+}
 
-    if hidden_dynamics:
-        sections.append(make_section("hd", "🔍", labels["hidden_dynamics"], f'<ul>{make_list(hidden_dynamics)}</ul>'))
+.smarty-quote {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 20px 25px;
+    border-radius: 12px;
+    margin-bottom: 30px;
+}
 
-    concl_html = f'<div class="conclusion-box"><h4>🎯 {labels["main_insight"]}</h4><p>{_esc(conclusion.get("main_insight",""))}</p><h4>💡 {labels["key_rec"]}</h4><p>{_esc(conclusion.get("key_recommendation",""))}</p><h4>🔮 {labels["forecast"]}</h4><p>{_esc(conclusion.get("forecast",""))}</p></div>'
-    sections.append(make_section("concl", "🏁", labels["conclusion"], concl_html))
+.smarty-quote em { font-size: 16px; }
 
-    all_sections = "\n".join(sections)
-    html = f"""<!DOCTYPE html>
-<html lang="{lang}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>{_esc(title)}</title>
-<style>
-*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f7fa;color:#2d3748;line-height:1.6}}.container{{max-width:800px;margin:0 auto;padding:20px}}.header{{background:linear-gradient(135deg,#1a365d 0%,#2b6cb0 100%);color:#fff;padding:30px;border-radius:16px;margin-bottom:20px}}.header h1{{font-size:1.5em;margin-bottom:4px}}.header .subtitle{{font-size:.9em;opacity:.85}}.header .meta{{font-size:.8em;opacity:.7;margin-top:8px}}.section{{background:#fff;border-radius:12px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);overflow:hidden}}.section-header{{padding:16px 20px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-weight:600;font-size:1.05em;transition:background .2s}}.section-header:hover{{background:#f7fafc}}.section-header.open{{background:#ebf8ff}}.chevron{{font-size:.8em;transition:transform .3s;color:#a0aec0}}.chevron.open{{transform:rotate(90deg)}}.section-body{{padding:0 20px 16px 20px}}.section-body h4{{color:#2b6cb0;margin:12px 0 6px 0;font-size:.95em}}.section-body ul{{padding-left:20px}}.section-body li{{margin-bottom:6px}}.section-body p{{margin:8px 0}}.info-table{{width:100%}}.info-table td{{padding:6px 0}}.info-table .label{{color:#718096;width:40%;font-weight:500}}.ai-table{{width:100%;border-collapse:collapse;margin:8px 0}}.ai-table th{{background:#edf2f7;padding:8px 12px;text-align:left;font-size:.9em}}.ai-table td{{padding:8px 12px;border-bottom:1px solid #edf2f7;font-size:.9em}}.rec-box{{background:#fffff0;border-left:4px solid #ecc94b;padding:12px 16px;margin-top:12px;border-radius:0 8px 8px 0}}.rec-label{{font-weight:600;color:#b7791f;margin-bottom:4px;font-size:.9em}}.conclusion-box{{background:#ebf8ff;padding:16px;border-radius:8px}}.position-box{{background:#f7fafc;padding:12px;border-radius:8px;margin:8px 0}}.swot-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:8px 0}}.swot-cell{{padding:12px;border-radius:8px}}.swot-strengths{{background:#f0fff4}}.swot-weaknesses{{background:#fff5f5}}.swot-opportunities{{background:#ebf8ff}}.swot-threats{{background:#fffff0}}.swot-cell h4{{font-size:.9em;margin-bottom:6px}}.swot-cell ul{{font-size:.9em}}.footer{{text-align:center;padding:20px;color:#a0aec0;font-size:.8em}}.badge{{display:inline-block;padding:2px 8px;border-radius:12px;font-size:.75em;font-weight:600}}.badge-fact{{background:#ebf8ff;color:#2b6cb0}}.badge-rec{{background:#fffff0;color:#b7791f}}@media(max-width:600px){{.swot-grid{{grid-template-columns:1fr}}.container{{padding:10px}}.header{{padding:20px}}}}
-</style></head><body>
-<div class="container">
-<div class="header"><h1>🧠 {_esc(title)}</h1><div class="subtitle">{labels['report_by']}</div><div class="meta">{now}</div></div>
-{all_sections}
-<div class="footer"><span class="badge badge-fact">{labels['facts_badge']}</span> <span class="badge badge-rec">{labels['rec_badge']}</span><br><br>🧠 Цифровой Умник • {now}</div>
-</div>
-<script>function toggle(id){{const b=document.getElementById('body-'+id);const c=document.getElementById('chev-'+id);if(b.style.display==='none'){{b.style.display='block';c.classList.add('open')}}else{{b.style.display='none';c.classList.remove('open')}}}}</script>
-</body></html>"""
-    return html
+.smarty-quote .signature {
+    display: block;
+    text-align: right;
+    margin-top: 10px;
+    font-size: 12px;
+    opacity: 0.8;
+}
 
+section { margin-bottom: 30px; }
 
-def generate_pdf_report(analysis: dict, lang: str = "ru") -> str:
-    """Generate PDF report, return path to temp file."""
-    from fpdf import FPDF
-    title = analysis.get("title", "Анализ встречи")
-    now = datetime.now().strftime("%d.%m.%Y в %H:%M")
-    labels = _get_labels(lang)
+h2 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #1a1a2e;
+    margin-bottom: 15px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #eef2f7;
+}
 
-    class MeetingPDF(FPDF):
-        def __init__(self):
-            super().__init__()
-            fps = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf","/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
-            if all(os.path.exists(p) for p in fps):
-                self.add_font("DejaVu","",fps[0])
-                self.add_font("DejaVu","B",fps[1])
-                self.font_name="DejaVu"
-            else:
-                self.font_name="Helvetica"
-            self.set_auto_page_break(auto=True,margin=20)
-        def header(self):
-            self.set_fill_color(26,54,93)
-            self.rect(0,0,210,35,'F')
-            self.set_font(self.font_name,"B",14)
-            self.set_text_color(255,255,255)
-            self.set_y(8)
-            self.cell(0,8,labels['report_by'],ln=True,align="C")
-            self.set_font(self.font_name,"",9)
-            self.cell(0,6,now,ln=True,align="C")
-            self.set_text_color(0,0,0)
-            self.ln(10)
-        def footer(self):
-            self.set_y(-15)
-            self.set_font(self.font_name,"",8)
-            self.set_text_color(150,150,150)
-            self.cell(0,10,f"Цифровой Умник - {now} - {self.page_no()}",align="C")
-        def sec_title(self,num,icon,text):
-            self.set_font(self.font_name,"B",12)
-            self.set_text_color(43,108,176)
-            self.ln(4)
-            self.cell(0,8,f"  {icon} {num}. {text}",ln=True)
-            self.set_draw_color(43,108,176)
-            self.line(10,self.get_y(),200,self.get_y())
-            self.ln(2)
-            self.set_text_color(0,0,0)
-        def body_text(self,text):
-            self.set_font(self.font_name,"",10)
-            self.multi_cell(0,6,text)
-            self.ln(2)
-        def bullet(self,text):
-            self.set_font(self.font_name,"",10)
-            self.cell(8,6,"  *")
-            self.multi_cell(0,6,text)
+h3 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
 
-    pdf = MeetingPDF()
-    pdf.add_page()
-    pdf.set_font(pdf.font_name,"B",16)
-    pdf.cell(0,10,title,ln=True,align="C")
-    pdf.ln(4)
+.topic-card {
+    background: #f8fafc;
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    border-left: 4px solid #667eea;
+}
 
-    pdf.sec_title(1,"",labels["summary"].upper())
-    pdf.body_text(analysis.get("executive_summary","—"))
+.topic-card.high { border-left-color: #ef4444; }
+.topic-card.medium { border-left-color: #f59e0b; }
+.topic-card.low { border-left-color: #10b981; }
 
-    ctx=analysis.get("context",{})
-    pdf.sec_title(2,"",labels["context"].upper())
-    for k,lb in [("industry",labels["industry"]),("meeting_type",labels["meeting_type"]),("complexity",labels["complexity"])]:
-        pdf.set_font(pdf.font_name,"B",10)
-        pdf.cell(60,6,f"  {lb}:")
-        pdf.set_font(pdf.font_name,"",10)
-        pdf.cell(0,6,ctx.get(k,"—"),ln=True)
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    background: #e2e8f0;
+    color: #64748b;
+}
 
-    goals=analysis.get("goals",{})
-    pdf.sec_title(3,"",labels["goals"].upper())
-    pdf.set_font(pdf.font_name,"B",10)
-    pdf.cell(0,6,f"  {labels['explicit_goals']}:",ln=True)
-    for g in goals.get("explicit",[]):
-        pdf.bullet(g)
-    pdf.set_font(pdf.font_name,"B",10)
-    pdf.cell(0,6,f"  {labels['hidden_goals']}:",ln=True)
-    for g in goals.get("hidden",[]):
-        pdf.bullet(g)
+.speaker-card {
+    background: #f8fafc;
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+}
 
-    topics=analysis.get("key_topics",[])
-    pdf.sec_title(4,"",labels["topics"].upper())
-    for i,t in enumerate(topics,1):
-        tt=t.get("topic",t) if isinstance(t,dict) else str(t)
-        pdf.set_font(pdf.font_name,"B",10)
-        pdf.cell(0,6,f"  {i}. {tt}",ln=True)
-        if isinstance(t,dict) and t.get("details"):
-            pdf.set_font(pdf.font_name,"",9)
-            pdf.multi_cell(0,5,f"     {t['details']}")
+.speaker-card .stance {
+    color: #64748b;
+    font-style: italic;
+    margin-bottom: 10px;
+}
 
-    pos=analysis.get("positions",{})
-    if pos:
-        pdf.sec_title(5,"",labels["positions"].upper())
-        for sk in ["side_a","side_b"]:
-            s=pos.get(sk,{})
-            if s:
-                pdf.set_font(pdf.font_name,"B",10)
-                pdf.cell(0,6,f"  {s.get('label',sk)}:",ln=True)
-                pdf.body_text(f"    {labels['position']}: {s.get('position','—')}")
-                pdf.body_text(f"    {labels['interests']}: {s.get('interests','—')}")
+.speaker-card ul { margin-left: 20px; }
 
-    pdf.sec_title(6,"",labels["consensus"].upper())
-    pdf.set_font(pdf.font_name,"B",10)
-    pdf.cell(0,6,f"  {labels['agreement']}:",ln=True)
-    for a in analysis.get("agreement_points",[]):
-        pdf.bullet(a)
-    pdf.set_font(pdf.font_name,"B",10)
-    pdf.cell(0,6,f"  {labels['disagreement']}:",ln=True)
-    for d in analysis.get("disagreement_points",[]):
-        pdf.bullet(d)
+.task-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid #eef2f7;
+}
 
-    pdf.sec_title(7,"",labels["decisions"].upper())
-    for d in analysis.get("decisions",[]):
-        pdf.bullet(d)
+.checkbox { font-size: 18px; color: #667eea; }
+.task-text { flex: 1; }
+.responsible { color: #667eea; font-weight: 500; font-size: 13px; }
+.deadline { color: #f59e0b; font-size: 12px; }
 
-    ais=analysis.get("action_items",[])
-    pdf.sec_title(8,"",labels["action_items"].upper())
-    for item in ais:
-        if isinstance(item,dict):
-            pdf.bullet(f"{item.get('task','')} | {item.get('deadline','—')} | {item.get('responsible','—')}")
-        else:
-            pdf.bullet(str(item))
+.risk-item {
+    padding: 10px 15px;
+    background: #fef2f2;
+    border-radius: 6px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
 
-    swot=analysis.get("swot",{})
-    pdf.sec_title(9,"","SWOT")
-    for k,(ic,lb) in [("strengths",("S",labels.get("strengths","S"))),("weaknesses",("W",labels.get("weaknesses","W"))),("opportunities",("O",labels.get("opportunities","O"))),("threats",("T",labels.get("threats","T")))]:
-        items=swot.get(k,[])
-        if items:
-            pdf.set_font(pdf.font_name,"B",10)
-            pdf.cell(0,6,f"  {lb}:",ln=True)
-            for item in items:
-                pdf.bullet(item)
+.risk-item.high { background: #fef2f2; }
+.risk-item.medium { background: #fffbeb; }
+.risk-item.low { background: #f0fdf4; }
 
-    recs=analysis.get("recommendations",{})
-    pdf.sec_title(10,"",labels["recommendations"].upper())
-    for r in recs.get("substance",[]):
-        pdf.bullet(r)
-    if recs.get("methodology"):
-        pdf.set_font(pdf.font_name,"B",10)
-        pdf.cell(0,6,f"  {labels['rec_method']}:",ln=True)
-        for r in recs.get("methodology",[]):
-            pdf.bullet(r)
+.severity-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ef4444;
+}
 
-    risks=analysis.get("risks",[])
-    pdf.sec_title(11,"",labels["risks_title"].upper())
-    for r in risks:
-        if isinstance(r,dict):
-            pdf.bullet(f"{r.get('risk','')} | {r.get('severity','')} | {r.get('mitigation','')}")
+.risk-item.medium .severity-dot { background: #f59e0b; }
+.risk-item.low .severity-dot { background: #10b981; }
 
-    pdf.sec_title(12,"",labels["open_questions"].upper())
-    for q in analysis.get("open_questions",[]):
-        pdf.bullet(q)
+.reality-check {
+    background: #f0f9ff;
+    padding: 20px;
+    border-radius: 12px;
+    border: 1px solid #bae6fd;
+}
 
-    ap=analysis.get("action_plan",{})
-    pdf.sec_title(13,"",labels["action_plan"].upper())
-    for pk,pl in [("urgent",labels["urgent"]),("medium",labels["medium"]),("long_term",labels["long_term"])]:
-        items=ap.get(pk,[])
-        if items:
-            pdf.set_font(pdf.font_name,"B",10)
-            pdf.cell(0,6,f"  {pl}:",ln=True)
-            for item in items:
-                pdf.bullet(item)
-    kpi=analysis.get("kpi",[])
-    if kpi:
-        pdf.set_font(pdf.font_name,"B",10)
-        pdf.cell(0,6,"  KPI:",ln=True)
-        for k in kpi:
-            pdf.bullet(k)
+.reality-check h2 { border-bottom: none; margin-bottom: 15px; }
+.feasibility, .concerns, .recommendations { margin-bottom: 15px; }
 
-    hd=analysis.get("hidden_dynamics",[])
-    if hd:
-        pdf.sec_title(14,"",labels["hidden_dynamics"].upper())
-        for h in hd:
-            pdf.bullet(h)
+.insights-list { counter-reset: insights; list-style: none; }
 
-    concl=analysis.get("conclusion",{})
-    pdf.sec_title(15,"",labels["conclusion"].upper())
-    if concl.get("main_insight"):
-        pdf.set_font(pdf.font_name,"B",10)
-        pdf.cell(0,6,f"  {labels['main_insight']}:",ln=True)
-        pdf.body_text(f"    {concl['main_insight']}")
-    if concl.get("key_recommendation"):
-        pdf.set_font(pdf.font_name,"B",10)
-        pdf.cell(0,6,f"  {labels['key_rec']}:",ln=True)
-        pdf.body_text(f"    {concl['key_recommendation']}")
-    if concl.get("forecast"):
-        pdf.set_font(pdf.font_name,"B",10)
-        pdf.cell(0,6,f"  {labels['forecast']}:",ln=True)
-        pdf.body_text(f"    {concl['forecast']}")
+.insights-list li {
+    counter-increment: insights;
+    padding: 12px 15px 12px 45px;
+    background: #f8fafc;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    position: relative;
+}
 
-    tmp=tempfile.mktemp(suffix=".pdf")
-    pdf.output(tmp)
-    return tmp
+.insights-list li::before {
+    content: counter(insights);
+    position: absolute;
+    left: 15px;
+    width: 22px;
+    height: 22px;
+    background: #667eea;
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+}
 
+footer {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid #eef2f7;
+    text-align: center;
+    color: #94a3b8;
+    font-size: 12px;
+}
+'''
 
-def _esc(text):
-    if not text:
-        return ""
-    return str(text).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-
-
-def _get_labels(lang: str) -> dict:
-    labels = {
-        "ru": {"report_by":"Экспертный отчёт от Цифрового Умника","summary":"Краткое содержание","context":"Контекст и область","industry":"Сфера/индустрия","meeting_type":"Тип встречи","complexity":"Уровень сложности","goals":"Цели встречи","explicit_goals":"Явные цели","hidden_goals":"Скрытые цели","topics":"Ключевые темы","positions":"Выявленные позиции","position":"Позиция","interests":"Истинные интересы","consensus":"Точки согласия и расхождения","agreement":"Точки согласия","disagreement":"Точки расхождения","decisions":"Принятые решения","action_items":"Задачи (Action Items)","task":"Задача","responsible":"Ответственный","deadline":"Срок","recommendations":"Рекомендации","rec_substance":"По существу","rec_method":"Инструменты и методологии","smarty_rec":"Рекомендация от Цифрового Умника","risks_title":"Риски","risk":"Риск","severity":"Вероятность","mitigation":"Митигация","open_questions":"Открытые вопросы","action_plan":"План действий","urgent":"Срочно (1-7 дней)","medium":"Среднесрок (1-4 недели)","long_term":"Долгосрок (1-3 месяца)","hidden_dynamics":"Скрытая динамика","conclusion":"Заключение Цифрового Умника","main_insight":"Главный инсайт","key_rec":"Ключевая рекомендация","forecast":"Прогноз","facts_badge":"Факты из встречи","rec_badge":"Рекомендации Умника","strengths":"Сильные стороны","weaknesses":"Слабые стороны","opportunities":"Возможности","threats":"Угрозы"},
-        "en": {"report_by":"Expert Report by Digital Smarty","summary":"Executive Summary","context":"Context & Scope","industry":"Industry","meeting_type":"Meeting Type","complexity":"Complexity","goals":"Meeting Goals","explicit_goals":"Explicit Goals","hidden_goals":"Hidden Goals","topics":"Key Topics","positions":"Identified Positions","position":"Position","interests":"True Interests","consensus":"Agreement & Disagreement","agreement":"Agreement Points","disagreement":"Disagreement Points","decisions":"Decisions Made","action_items":"Action Items","task":"Task","responsible":"Owner","deadline":"Deadline","recommendations":"Recommendations","rec_substance":"Substantive","rec_method":"Tools & Methodologies","smarty_rec":"Digital Smarty's Recommendation","risks_title":"Risks","risk":"Risk","severity":"Severity","mitigation":"Mitigation","open_questions":"Open Questions","action_plan":"Action Plan","urgent":"Urgent (1-7 days)","medium":"Medium-term (1-4 weeks)","long_term":"Long-term (1-3 months)","hidden_dynamics":"Hidden Dynamics","conclusion":"Digital Smarty's Conclusion","main_insight":"Key Insight","key_rec":"Key Recommendation","forecast":"Forecast","facts_badge":"Meeting Facts","rec_badge":"Smarty's Recommendations","strengths":"Strengths","weaknesses":"Weaknesses","opportunities":"Opportunities","threats":"Threats"},
-        "kk": {"report_by":"Цифрлық Зерек сарапшылық есебі","summary":"Қысқаша мазмұны","context":"Контекст және аумақ","industry":"Сала","meeting_type":"Кездесу түрі","complexity":"Күрделілік деңгейі","goals":"Кездесу мақсаттары","explicit_goals":"Айқын мақсаттар","hidden_goals":"Жасырын мақсаттар","topics":"Негізгі тақырыптар","positions":"Анықталған ұстанымдар","position":"Ұстаным","interests":"Шынайы мүдделер","consensus":"Келісу және келіспеу","agreement":"Келісу нүктелері","disagreement":"Келіспеу нүктелері","decisions":"Қабылданған шешімдер","action_items":"Тапсырмалар","task":"Тапсырма","responsible":"Жауапты","deadline":"Мерзімі","recommendations":"Ұсыныстар","rec_substance":"Мәні бойынша","rec_method":"Құралдар мен әдістемелер","smarty_rec":"Цифрлық Зерек ұсынысы","risks_title":"Тәуекелдер","risk":"Тәуекел","severity":"Ықтималдығы","mitigation":"Азайту","open_questions":"Ашық сұрақтар","action_plan":"Іс-қимыл жоспары","urgent":"Шұғыл (1-7 күн)","medium":"Орта мерзім (1-4 апта)","long_term":"Ұзақ мерзім (1-3 ай)","hidden_dynamics":"Жасырын динамика","conclusion":"Цифрлық Зерек қорытындысы","main_insight":"Басты түсінік","key_rec":"Негізгі ұсыныс","forecast":"Болжам","facts_badge":"Кездесу фактілері","rec_badge":"Зерек ұсыныстары","strengths":"Күшті жақтары","weaknesses":"Әлсіз жақтары","opportunities":"Мүмкіндіктер","threats":"Қауіптер"},
-        "es": {"report_by":"Informe Experto de Digital Smarty","summary":"Resumen Ejecutivo","context":"Contexto y Alcance","industry":"Industria","meeting_type":"Tipo de reunión","complexity":"Complejidad","goals":"Objetivos","explicit_goals":"Objetivos explícitos","hidden_goals":"Objetivos ocultos","topics":"Temas clave","positions":"Posiciones identificadas","position":"Posición","interests":"Intereses reales","consensus":"Acuerdos y desacuerdos","agreement":"Puntos de acuerdo","disagreement":"Puntos de desacuerdo","decisions":"Decisiones tomadas","action_items":"Tareas pendientes","task":"Tarea","responsible":"Responsable","deadline":"Plazo","recommendations":"Recomendaciones","rec_substance":"De fondo","rec_method":"Herramientas y metodologías","smarty_rec":"Recomendación de Digital Smarty","risks_title":"Riesgos","risk":"Riesgo","severity":"Severidad","mitigation":"Mitigación","open_questions":"Preguntas abiertas","action_plan":"Plan de acción","urgent":"Urgente (1-7 días)","medium":"Medio plazo (1-4 semanas)","long_term":"Largo plazo (1-3 meses)","hidden_dynamics":"Dinámica oculta","conclusion":"Conclusión de Digital Smarty","main_insight":"Insight principal","key_rec":"Recomendación clave","forecast":"Pronóstico","facts_badge":"Hechos","rec_badge":"Recomendaciones","strengths":"Fortalezas","weaknesses":"Debilidades","opportunities":"Oportunidades","threats":"Amenazas"},
-    }
-    return labels.get(lang, labels.get("en", labels["ru"]))
-
-
-def safe_filename(title: str) -> str:
-    safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in title)
-    return safe.strip()[:60] or "meeting_report"
+    def generate_html(self, analysis: dict, transcript_data: dict) -> str:
+        template = Template(self.template)
+        
+        html = template.render(
+            css=self.css,
+            title=analysis.get("title", "Meeting Summary"),
+            date=analysis.get("date_mentioned") or datetime.now().strftime("%d.%m.%Y"),
+            duration=analysis.get("duration_minutes", 0),
+            participants=analysis.get("participants_count", 1),
+            detected_language=analysis.get("detected_language"),
+            smarty_comment=analysis.get("smarty_comment"),
+            key_topics=analysis.get("key_topics", []),
+            speaker_positions=analysis.get("speaker_positions", []),
+            decisions=analysis.get("decisions", []),
+            action_items=analysis.get("action_items", []),
+            open_questions=analysis.get("open_questions", []),
+            risks=analysis.get("risks", []),
+            reality_check=analysis.get("reality_check"),
+            key_insights=analysis.get("key_insights", []),
+            generated_at=datetime.now().strftime("%d.%m.%Y %H:%M")
+        )
+        return html
+    
+    def generate_pdf(self, html_content: str, output_path: str) -> str:
+        font_config = FontConfiguration()
+        html = HTML(string=html_content)
+        html.write_pdf(output_path, font_config=font_config)
+        return output_path
+    
+    def generate_transcript_file(self, transcript_data: dict, output_path: str) -> str:
+        lines = []
+        lines.append("=" * 60)
+        lines.append("TRANSCRIPT")
+        lines.append(f"Duration: {int(transcript_data.get('duration', 0) / 60)} min")
+        lines.append(f"Participants: {transcript_data.get('speakers_count', 1)}")
+        lines.append("=" * 60)
+        lines.append("")
+        
+        for segment in transcript_data.get("speakers", []):
+            speaker = f"Speaker {segment['speaker'] + 1}"
+            lines.append(f"[{speaker}]")
+            lines.append(segment["text"])
+            lines.append("")
+        
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        
+        return output_path
